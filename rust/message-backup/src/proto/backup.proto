@@ -487,6 +487,7 @@ message StandardMessage {
   repeated LinkPreview linkPreview = 4;
   optional FilePointer longText = 5;
   repeated Reaction reactions = 6;
+  optional bytes gossip = 7; // Gossip message, if present
 }
 
 message ContactMessage {

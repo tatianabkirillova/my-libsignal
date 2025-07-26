@@ -29,6 +29,7 @@ pub struct StandardMessage<Recipient> {
     pub reactions: ReactionSet<Recipient>,
     pub link_previews: Vec<LinkPreview>,
     pub long_text: Option<Box<FilePointer>>,
+    pub gossip: Option<Vec<u8>>,
     _limit_construction_to_module: (),
 }
 
@@ -38,13 +39,14 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
     type Error = ChatItemError;
 
     fn try_into_with(self, context: &C) -> Result<StandardMessage<R>, Self::Error> {
-        let proto::StandardMessage {
+        let proto::StandardMessage { // here
             text,
             quote,
             attachments,
             reactions,
             linkPreview,
             longText,
+            gossip,
             special_fields: _,
         } = self;
 
@@ -101,6 +103,7 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
             reactions,
             link_previews,
             long_text: long_text.map(Box::new),
+            gossip,
             _limit_construction_to_module: (),
         })
     }
@@ -123,6 +126,7 @@ mod test {
                 attachments: vec![proto::MessageAttachment::test_data()],
                 quote: Some(proto::Quote::test_data()).into(),
                 longText: Some(proto::FilePointer::minimal_test_data()).into(),
+                gossip: Some(vec![1, 2, 3]),
                 ..Default::default()
             }
         }
@@ -147,6 +151,7 @@ mod test {
                 quote: Some(Box::new(Quote::from_proto_test_data())),
                 long_text: Some(Box::new(FilePointer::default())),
                 link_previews: vec![],
+                gossip: Some(vec![1, 2, 3]),
                 _limit_construction_to_module: (),
             }
         }
