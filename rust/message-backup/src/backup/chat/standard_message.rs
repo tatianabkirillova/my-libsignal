@@ -151,7 +151,7 @@ mod test {
                 quote: Some(Box::new(Quote::from_proto_test_data())),
                 long_text: Some(Box::new(FilePointer::default())),
                 link_previews: vec![],
-                gossip: Some(vec![]), // empty gossip
+                gossip: Some(vec![1,2,3]), // empty gossip
                 _limit_construction_to_module: (),
             }
         }
