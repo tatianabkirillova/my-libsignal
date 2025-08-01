@@ -1,35 +1,35 @@
 [
     {
-    "backupTimeMs": "123456",
-    "version": "1",
-    "mediaRootBackupKey": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s="
+        "backupTimeMs": "123456",
+        "version": "1",
+        "mediaRootBackupKey": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s="
     },
     {
-    "account": {
-      "profileKey": "YQKRq+3DQklInaOaMcmlzZnN0m/1hzLiaONX7gB12dg=",
-      "givenName": "Boba",
-      "familyName": "Fett",
-      "avatarUrlPath": "",
-      "accountSettings": {
-        "readReceipts": false,
-        "sealedSenderIndicators": true,
-        "typingIndicators": false,
-        "linkPreviews": false,
-        "notDiscoverableByPhoneNumber": false,
-        "preferContactAvatars": false,
-        "universalExpireTimerSeconds": 0,
-        "preferredReactionEmoji": [],
-        "displayBadgesOnProfile": false,
-        "keepMutedChatsArchived": false,
-        "hasSetMyStoriesPrivacy": false,
-        "hasViewedOnboardingStory": false,
-        "storiesDisabled": false,
-        "storyViewReceiptsEnabled": false,
-        "hasSeenGroupStoryEducationSheet": false,
-        "hasCompletedUsernameOnboarding": false,
-        "phoneNumberSharingMode": "NOBODY"
-      }
-    }
+        "account": {
+        "profileKey": "YQKRq+3DQklInaOaMcmlzZnN0m/1hzLiaONX7gB12dg=",
+        "givenName": "Boba",
+        "familyName": "Fett",
+        "avatarUrlPath": "",
+        "accountSettings": {
+            "readReceipts": false,
+            "sealedSenderIndicators": true,
+            "typingIndicators": false,
+            "linkPreviews": false,
+            "notDiscoverableByPhoneNumber": false,
+            "preferContactAvatars": false,
+            "universalExpireTimerSeconds": 0,
+            "preferredReactionEmoji": [],
+            "displayBadgesOnProfile": false,
+            "keepMutedChatsArchived": false,
+            "hasSetMyStoriesPrivacy": false,
+            "hasViewedOnboardingStory": false,
+            "storiesDisabled": false,
+            "storyViewReceiptsEnabled": false,
+            "hasSeenGroupStoryEducationSheet": false,
+            "hasCompletedUsernameOnboarding": false,
+            "phoneNumberSharingMode": "NOBODY"
+            }
+        }
     },
     {
         "recipient": {
@@ -39,30 +39,30 @@
     },
     {
         "recipient": {
-        "id": "2",
-        "releaseNotes": {}
+            "id": "2",
+            "releaseNotes": {}
         }
     },
     {
-    "chat": {
-        "id": 1,
-        "recipientId": 2,
-        "archived": false
-    }
+        "chat": {
+            "id": 1,
+            "recipientId": 2,
+            "archived": false
+        }
     },
     {
-    "chatItem": {
-        "authorId": 2,
-        "chatId": 1,
-        "dateSent": 3000,
-        "incoming": {
-        "sealedSender": true
-        },
-        "standardMessage": {
-        "text": {
-            "body": "Hello world!"
+        "chatItem": {
+            "authorId": 2,
+            "chatId": 1,
+            "dateSent": 3000,
+            "incoming": {
+                "sealedSender": true
+            },
+            "standardMessage": {
+                "text": {
+                    "body": "Hello world!"
+                }
+            }
         }
-        }
-    }
     }
     ]
