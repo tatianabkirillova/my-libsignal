@@ -126,7 +126,7 @@ mod test {
                 attachments: vec![proto::MessageAttachment::test_data()],
                 quote: Some(proto::Quote::test_data()).into(),
                 longText: Some(proto::FilePointer::minimal_test_data()).into(),
-                gossip: Some(vec![1, 2, 3]),
+                gossip: Some(vec![]), // empty gossip
                 ..Default::default()
             }
         }
@@ -151,7 +151,7 @@ mod test {
                 quote: Some(Box::new(Quote::from_proto_test_data())),
                 long_text: Some(Box::new(FilePointer::default())),
                 link_previews: vec![],
-                gossip: Some(vec![1, 2, 3]),
+                gossip: Some(vec![]), // empty gossip
                 _limit_construction_to_module: (),
             }
         }

@@ -61,7 +61,8 @@
             "standardMessage": {
                 "text": {
                     "body": "Hello world!"
-                }
+                },
+                "gossip": ""
             }
         }
     }
