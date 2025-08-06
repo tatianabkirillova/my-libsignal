@@ -487,7 +487,7 @@ message StandardMessage {
   repeated LinkPreview linkPreview = 4;
   optional FilePointer longText = 5;
   repeated Reaction reactions = 6;
-  optional bytes gossip = 7; // Gossip message, if present
+  optional Gossip gossip = 7;
 }
 
 message ContactMessage {
@@ -1392,4 +1392,10 @@ message ChatFolder {
   repeated uint64 includedRecipientIds = 7; // generated recipient id of groups, contacts, and/or note to self
   repeated uint64 excludedRecipientIds = 8; // generated recipient id of groups, contacts, and/or note to self
   bytes id = 9; // should be 16 bytes
+}
+
+message Gossip {
+  uint64 tree_size = 1;
+  uint64 timestamp = 2;
+  bytes  signature = 3;
 }

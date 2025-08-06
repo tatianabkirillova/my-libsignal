@@ -62,7 +62,11 @@
                 "text": {
                     "body": "Hello world!"
                 },
-                "gossip": "AQID"
+                "gossip": {
+                    "tree_size": 42,
+                    "timestamp": 123456789,
+                    "signature": "AQID" 
+                }
             }
         }
     }

@@ -48,6 +48,9 @@ use reactions::*;
 mod standard_message;
 use standard_message::*;
 
+mod gossip;
+use gossip::*;
+
 mod sticker_message;
 use sticker_message::*;
 

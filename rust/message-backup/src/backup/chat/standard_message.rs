@@ -7,6 +7,7 @@ use derive_where::derive_where;
 
 use crate::backup::chat::link::LinkPreview;
 use crate::backup::chat::quote::Quote;
+use crate::backup::chat::Gossip;
 use crate::backup::chat::text::MessageText;
 use crate::backup::chat::{ChatItemError, ReactionSet};
 use crate::backup::file::{FilePointer, MessageAttachment};
@@ -29,7 +30,7 @@ pub struct StandardMessage<Recipient> {
     pub reactions: ReactionSet<Recipient>,
     pub link_previews: Vec<LinkPreview>,
     pub long_text: Option<Box<FilePointer>>,
-    pub gossip: Option<Vec<u8>>,
+    pub gossip: Option<Gossip>,
     _limit_construction_to_module: (),
 }
 
@@ -96,6 +97,10 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
             }
         }
 
+        let gossip = gossip
+            .into_option()
+            .map(|g| Gossip::try_from(g).unwrap());
+
         Ok(StandardMessage {
             text,
             quote: quote.map(Box::new),
@@ -126,7 +131,12 @@ mod test {
                 attachments: vec![proto::MessageAttachment::test_data()],
                 quote: Some(proto::Quote::test_data()).into(),
                 longText: Some(proto::FilePointer::minimal_test_data()).into(),
-                gossip: Some(vec![]), // empty gossip
+                gossip: Some(proto::Gossip {
+                    tree_size: 0,
+                    timestamp: 0,
+                    signature: vec![], // empty signature
+                    special_fields: Default::default(),
+                }),
                 ..Default::default()
             }
         }
@@ -151,7 +161,11 @@ mod test {
                 quote: Some(Box::new(Quote::from_proto_test_data())),
                 long_text: Some(Box::new(FilePointer::default())),
                 link_previews: vec![],
-                gossip: Some(vec![1,2,3]), // empty gossip
+                gossip: Some(crate::backup::chat::gossip::Gossip {
+                    tree_size: 42,
+                    timestamp: 123456789,
+                    signature: vec![1, 2, 3],
+                }),
                 _limit_construction_to_module: (),
             }
         }
