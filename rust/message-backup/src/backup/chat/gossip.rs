@@ -1,4 +1,5 @@
 use crate::proto::backup::Gossip as ProtoGossip;
+use crate::backup::TryIntoWith;
 
 #[derive(Debug, serde::Serialize)]
 #[cfg_attr(test, derive(PartialEq, Clone))]
@@ -8,14 +9,14 @@ pub struct Gossip {
     pub signature: Vec<u8>,
 }
 
-impl TryFrom<ProtoGossip> for Gossip {
+impl<C> TryIntoWith<Gossip, C> for ProtoGossip {
     type Error = ();
 
-    fn try_from(proto: ProtoGossip) -> Result<Self, Self::Error> {
+    fn try_into_with(self, _context: &C) -> Result<Gossip, Self::Error> {
         Ok(Gossip {
-            tree_size: proto.tree_size,
-            timestamp: proto.timestamp,
-            signature: proto.signature,
+            tree_size: self.tree_size,
+            timestamp: self.timestamp,
+            signature: self.signature,
         })
     }
 }

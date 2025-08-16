@@ -99,7 +99,7 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
 
         let gossip = gossip
             .into_option()
-            .map(|g| Gossip::try_from(g).unwrap());
+            .map(|g| g.try_into_with(&()).unwrap());
 
         Ok(StandardMessage {
             text,
