@@ -1397,5 +1397,6 @@ message ChatFolder {
 message Gossip {
   uint64 tree_size = 1;
   uint64 timestamp = 2;
-  bytes  signature = 3;
+  bytes signature = 3;
+  bytes root_hash = 4;
 }

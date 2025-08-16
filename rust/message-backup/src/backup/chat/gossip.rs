@@ -6,7 +6,8 @@ use crate::backup::TryIntoWith;
 pub struct Gossip {
     pub tree_size: u64,
     pub timestamp: u64,
-    pub signature: Vec<u8>,
+    pub signature: Vec<u8>, 
+    pub root_hash: Vec<u8>,
 }
 
 impl<C> TryIntoWith<Gossip, C> for ProtoGossip {
@@ -16,7 +17,8 @@ impl<C> TryIntoWith<Gossip, C> for ProtoGossip {
         Ok(Gossip {
             tree_size: self.tree_size,
             timestamp: self.timestamp,
-            signature: self.signature,
+            signature: self.signature, 
+            root_hash: self.root_hash,
         })
     }
 }

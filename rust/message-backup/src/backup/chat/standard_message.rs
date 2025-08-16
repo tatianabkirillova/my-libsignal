@@ -30,7 +30,7 @@ pub struct StandardMessage<Recipient> {
     pub reactions: ReactionSet<Recipient>,
     pub link_previews: Vec<LinkPreview>,
     pub long_text: Option<Box<FilePointer>>,
-    pub gossip: Option<Gossip>,
+    pub gossip: Option<Box<Gossip>>,
     _limit_construction_to_module: (),
 }
 
@@ -99,7 +99,7 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
 
         let gossip = gossip
             .into_option()
-            .map(|g| g.try_into_with(&()).unwrap());
+            .map(|g| Box::new(g.try_into_with(&()).unwrap()));
 
         Ok(StandardMessage {
             text,
@@ -131,12 +131,13 @@ mod test {
                 attachments: vec![proto::MessageAttachment::test_data()],
                 quote: Some(proto::Quote::test_data()).into(),
                 longText: Some(proto::FilePointer::minimal_test_data()).into(),
-                gossip: Some(proto::Gossip {
+                gossip: Some(Box::new(Gossip {
                     tree_size: 0,
                     timestamp: 0,
                     signature: vec![], // empty signature
+                    root_hash: vec![], // empty root_hash
                     special_fields: Default::default(),
-                }),
+                })),
                 ..Default::default()
             }
         }
@@ -165,6 +166,7 @@ mod test {
                     tree_size: 42,
                     timestamp: 123456789,
                     signature: vec![1, 2, 3],
+                    root_hash: vec![1, 2, 3],
                 }),
                 _limit_construction_to_module: (),
             }
