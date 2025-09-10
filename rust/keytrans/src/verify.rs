@@ -227,7 +227,7 @@ fn verify_full_tree_head(
                     .as_slice()
                     .try_into()
                     .map_err(|_| Error::BadData("auditor tree head is malformed"))?;
-            let proof = get_hash_proof(&auditor_tree_head.consistency)?;
+            let proof = get_hash_proof(&auditor_tree_head.consistency)?; // Bookmark: consistency proof
             verify_consistency_proof(
                 auditor_head.tree_size,
                 tree_head.tree_size,

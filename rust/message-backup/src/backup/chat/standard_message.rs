@@ -136,6 +136,7 @@ mod test {
                     timestamp: 0,
                     signature: vec![], // empty signature
                     root_hash: vec![], // empty root_hash
+                    consistency: vec![], // empty consistency
                     special_fields: Default::default(),
                 })),
                 ..Default::default()
@@ -167,6 +168,7 @@ mod test {
                     timestamp: 123456789,
                     signature: vec![1, 2, 3],
                     root_hash: vec![1, 2, 3],
+                    consistency: vec![vec![4, 5, 6], vec![7, 8, 9]],
                 }),
                 _limit_construction_to_module: (),
             }

@@ -1399,4 +1399,5 @@ message Gossip {
   uint64 timestamp = 2;
   bytes signature = 3;
   bytes root_hash = 4;
+  repeated bytes consistency = 5;
 }

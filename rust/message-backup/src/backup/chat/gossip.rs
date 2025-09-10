@@ -8,6 +8,7 @@ pub struct Gossip {
     pub timestamp: u64,
     pub signature: Vec<u8>, 
     pub root_hash: Vec<u8>,
+    pub consistency: Vec<Vec<u8>>
 }
 
 impl<C> TryIntoWith<Gossip, C> for ProtoGossip {
@@ -19,6 +20,7 @@ impl<C> TryIntoWith<Gossip, C> for ProtoGossip {
             timestamp: self.timestamp,
             signature: self.signature, 
             root_hash: self.root_hash,
+            consistency: self.consistency
         })
     }
 }
