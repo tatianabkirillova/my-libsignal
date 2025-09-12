@@ -131,14 +131,7 @@ mod test {
                 attachments: vec![proto::MessageAttachment::test_data()],
                 quote: Some(proto::Quote::test_data()).into(),
                 longText: Some(proto::FilePointer::minimal_test_data()).into(),
-                gossip: Some(Box::new(Gossip {
-                    tree_size: 0,
-                    timestamp: 0,
-                    signature: vec![], // empty signature
-                    root_hash: vec![], // empty root_hash
-                    consistency: vec![], // empty consistency
-                    special_fields: Default::default(),
-                })),
+                gossip: Some(Box::new(Gossip::minimal_test_data())),
                 ..Default::default()
             }
         }
@@ -163,13 +156,13 @@ mod test {
                 quote: Some(Box::new(Quote::from_proto_test_data())),
                 long_text: Some(Box::new(FilePointer::default())),
                 link_previews: vec![],
-                gossip: Some(crate::backup::chat::gossip::Gossip {
-                    tree_size: 42,
-                    timestamp: 123456789,
-                    signature: vec![1, 2, 3],
-                    root_hash: vec![1, 2, 3],
-                    consistency: vec![vec![4, 5, 6], vec![7, 8, 9]],
-                }),
+                gossip: Some(crate::backup::chat::gossip::Gossip::new(
+                    42,
+                    Timestamp::from_epoch_millis(123456789),
+                    vec![1, 2, 3],
+                    vec![1, 2, 3],
+                    vec![vec![4, 5, 6], vec![7, 8, 9]],
+                )),
                 _limit_construction_to_module: (),
             }
         }

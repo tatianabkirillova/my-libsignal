@@ -57,7 +57,7 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
             attachments,
             linkPreview,
             longText,
-            gossip,
+            gossip: _,
             special_fields: _,
         } = self;
 

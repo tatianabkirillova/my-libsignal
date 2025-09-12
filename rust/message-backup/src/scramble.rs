@@ -1013,7 +1013,7 @@ impl Visit<Scrambler> for proto::StandardMessage {
             linkPreview,
             longText,
             reactions,
-            gossip,
+            gossip: _,
             special_fields: _,
         } = self;
 
