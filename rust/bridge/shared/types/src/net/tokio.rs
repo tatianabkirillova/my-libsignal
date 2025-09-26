@@ -9,8 +9,8 @@ use std::future::Future;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
-use futures_util::future::BoxFuture;
 use futures_util::FutureExt as _;
+use futures_util::future::BoxFuture;
 
 use crate::support::*;
 use crate::*;
@@ -23,14 +23,32 @@ pub struct TokioAsyncContext {
 impl TokioAsyncContext {
     // This is an expensive operation, so we don't want to just use Default.
     #[expect(clippy::new_without_default)]
+    #[inline]
     pub fn new() -> Self {
+        Self::from_runtime(&mut Self::default_runtime_builder())
+    }
+
+    #[inline]
+    pub fn new_single_threaded() -> Self {
+        Self::from_runtime(
+            Self::default_runtime_builder()
+                .worker_threads(1)
+                .max_blocking_threads(1),
+        )
+    }
+
+    fn default_runtime_builder() -> tokio::runtime::Builder {
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder
+            .enable_io()
+            .enable_time()
+            .thread_name("libsignal-tokio-worker");
+        builder
+    }
+
+    fn from_runtime(rt: &mut tokio::runtime::Builder) -> Self {
         Self {
-            rt: tokio::runtime::Builder::new_multi_thread()
-                .enable_io()
-                .enable_time()
-                .thread_name("libsignal-tokio-worker")
-                .build()
-                .expect("failed to create runtime"),
+            rt: rt.build().expect("failed to create runtime"),
             tasks: Default::default(),
             next_raw_cancellation_id: AtomicU64::new(1),
         }
@@ -88,7 +106,9 @@ impl AsyncRuntimeBase for TokioAsyncContext {
         if maybe_cancel_tx.is_some() {
             log::trace!("cancelling task for {cancellation_token:?}");
         } else {
-            log::trace!("ignoring cancellation for task {cancellation_token:?} (probably completed already)");
+            log::trace!(
+                "ignoring cancellation for task {cancellation_token:?} (probably completed already)"
+            );
         }
         drop(maybe_cancel_tx);
     }
@@ -158,12 +178,29 @@ impl TokioAsyncContext {
         let handle = self.rt.handle().clone();
         let task_map_weak = Arc::downgrade(&self.tasks);
 
+        const STALLED_FUTURE_LOG_TIMEOUT: tokio::time::Duration =
+            tokio::time::Duration::from_secs(90);
+
         #[expect(
             clippy::let_underscore_future,
             reason = "the tasks are never .join()ed"
         )]
         let _: tokio::task::JoinHandle<()> = self.rt.spawn(async move {
-            let report_fn = future.await;
+            let start_time = tokio::time::Instant::now();
+            let deadline = start_time + STALLED_FUTURE_LOG_TIMEOUT;
+            tokio::pin!(future);
+
+            let report_fn = tokio::select! {
+                report_fn = &mut future => report_fn,
+                _ = tokio::time::sleep_until(deadline) => {
+                    log::warn!(
+                        "Future with cancellation_id {:?} seems stalled (elapsed: {:?})",
+                        cancellation_id,
+                        start_time.elapsed()
+                    );
+                    future.await
+                }
+            };
             let _: tokio::task::JoinHandle<()> = handle.spawn_blocking(report_fn);
             // What happens if we don't get here? We leak an entry in the task map. Also, we
             // probably have bigger problems, because in practice all the `bridge_io` futures are
@@ -249,6 +286,7 @@ mod test {
         // Create a runtime with one worker thread running in the background.
         let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
         runtime_builder.worker_threads(1);
+        runtime_builder.enable_time();
         let runtime = runtime_builder.build().expect("valid runtime");
 
         // Create a task that will sum anything it is sent.
@@ -317,6 +355,7 @@ mod test {
         // Create a runtime with one worker thread running in the background.
         let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
         runtime_builder.worker_threads(1);
+        runtime_builder.enable_time();
         let runtime = runtime_builder.build().expect("valid runtime");
 
         let async_context = TokioAsyncContext {

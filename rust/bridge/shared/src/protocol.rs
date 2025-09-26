@@ -293,7 +293,7 @@ fn IdentityKey_VerifyAlternateIdentity(
     identity.verify_alternate_identity(&other_identity, signature)
 }
 
-#[bridge_fn(jni = false)]
+#[bridge_fn(jni = "NumericFingerprintGenerator_1New")]
 fn Fingerprint_New(
     iterations: u32,
     version: u32,
@@ -301,7 +301,7 @@ fn Fingerprint_New(
     local_key: &PublicKey,
     remote_identifier: &[u8],
     remote_key: &PublicKey,
-) -> Result<Fingerprint> {
+) -> std::result::Result<Fingerprint, FingerprintError> {
     Fingerprint::new(
         version,
         iterations,
@@ -312,41 +312,23 @@ fn Fingerprint_New(
     )
 }
 
-// Alternate implementation that takes untyped buffers.
-#[bridge_fn(ffi = false, node = false)]
-fn NumericFingerprintGenerator_New(
-    iterations: u32,
-    version: u32,
-    local_identifier: &[u8],
-    local_key: &[u8],
-    remote_identifier: &[u8],
-    remote_key: &[u8],
-) -> Result<Fingerprint> {
-    let local_key = IdentityKey::decode(local_key)?;
-    let remote_key = IdentityKey::decode(remote_key)?;
-
-    Fingerprint::new(
-        version,
-        iterations,
-        local_identifier,
-        &local_key,
-        remote_identifier,
-        &remote_key,
-    )
-}
-
 #[bridge_fn(jni = "NumericFingerprintGenerator_1GetScannableEncoding")]
-fn Fingerprint_ScannableEncoding(obj: &Fingerprint) -> Result<Vec<u8>> {
+fn Fingerprint_ScannableEncoding(
+    obj: &Fingerprint,
+) -> std::result::Result<Vec<u8>, FingerprintError> {
     obj.scannable.serialize()
 }
 
-bridge_get!(
-    Fingerprint::display_string as DisplayString -> String,
-    jni = "NumericFingerprintGenerator_1GetDisplayString"
-);
+#[bridge_fn(jni = "NumericFingerprintGenerator_1GetDisplayString")]
+fn Fingerprint_DisplayString(obj: &Fingerprint) -> std::result::Result<String, FingerprintError> {
+    obj.display_string()
+}
 
 #[bridge_fn(ffi = "fingerprint_compare")]
-fn ScannableFingerprint_Compare(fprint1: &[u8], fprint2: &[u8]) -> Result<bool> {
+fn ScannableFingerprint_Compare(
+    fprint1: &[u8],
+    fprint2: &[u8],
+) -> std::result::Result<bool, FingerprintError> {
     ScannableFingerprint::deserialize(fprint1)?.compare(fprint2)
 }
 
@@ -753,10 +735,16 @@ bridge_get!(SenderCertificate::key -> PublicKey);
 #[bridge_fn]
 fn SenderCertificate_Validate(
     cert: &SenderCertificate,
-    key: &PublicKey,
+    trust_roots: &[&PublicKey],
     time: Timestamp,
-) -> Result<bool> {
-    cert.validate(key, time)
+) -> bool {
+    cert.validate_with_trust_roots(trust_roots, time)
+        .inspect_err(|e| {
+            // Not all of the apps bother to inspect an Err failure before just saying "validate
+            // failed", so we log it here to be sure it won't be lost.
+            log::warn!("unable to validate certificate: {e}");
+        })
+        .unwrap_or(false)
 }
 
 #[bridge_fn]
@@ -989,7 +977,7 @@ fn SessionRecord_ArchiveCurrentState(session_record: &mut SessionRecord) -> Resu
 
 #[bridge_fn]
 fn SessionRecord_HasUsableSenderChain(s: &SessionRecord, now: Timestamp) -> Result<bool> {
-    s.has_usable_sender_chain(now.into())
+    s.has_usable_sender_chain(now.into(), SessionUsabilityRequirements::NotStale)
 }
 
 #[bridge_fn]

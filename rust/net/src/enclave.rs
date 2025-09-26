@@ -10,18 +10,20 @@ use attest::svr2::RaftConfig;
 use attest::{cds2, enclave};
 use derive_where::derive_where;
 use http::uri::PathAndQuery;
-use libsignal_net_infra::errors::LogSafeDisplay;
+use libsignal_net_infra::errors::{LogSafeDisplay, RetryLater};
+use libsignal_net_infra::extract_retry_later;
 use libsignal_net_infra::route::{
     DirectTcpRouteProvider, DomainFrontRouteProvider, HttpsProvider, TlsRouteProvider,
     WebSocketProvider, WebSocketRouteFragment,
 };
-use libsignal_net_infra::ws::WebSocketServiceError;
-use libsignal_net_infra::ws2::attested::{
+use libsignal_net_infra::ws::attested::{
     AttestedConnection, AttestedConnectionError, AttestedProtocolError,
 };
+use libsignal_net_infra::ws::{self, WebSocketConnectError, WebSocketError};
 
-use crate::env::DomainConfig;
+use crate::env::{DomainConfig, SvrBEnv};
 use crate::infra::{EnableDomainFronting, EnforceMinimumTls};
+use crate::svr::SvrConnection;
 use crate::ws::WebSocketServiceConnectError;
 
 pub trait AsRaftConfig<'a> {
@@ -45,9 +47,11 @@ pub trait EnclaveKind {
     fn url_path(enclave: &[u8]) -> PathAndQuery;
 }
 
+pub trait SvrBFlavor: EnclaveKind {}
+
 pub enum Cdsi {}
 
-pub enum Svr2 {}
+pub enum SvrSgx {}
 
 impl EnclaveKind for Cdsi {
     type RaftConfigType = ();
@@ -56,12 +60,14 @@ impl EnclaveKind for Cdsi {
     }
 }
 
-impl EnclaveKind for Svr2 {
+impl EnclaveKind for SvrSgx {
     type RaftConfigType = &'static RaftConfig;
     fn url_path(enclave: &[u8]) -> PathAndQuery {
         PathAndQuery::try_from(format!("/v1/{}", hex::encode(enclave))).unwrap()
     }
 }
+
+impl SvrBFlavor for SvrSgx {}
 
 /// Log-safe human-readable label for a connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,6 +156,22 @@ impl<T, const N: usize> ArrayIsh<T> for [T; N] {
     const N: usize = N;
 }
 
+pub trait PpssSetup {
+    type ConnectionResults: IntoConnectionResults + Send;
+    type ServerIds: ArrayIsh<u64> + Send;
+    const N: usize = Self::ServerIds::N;
+    fn server_ids() -> Self::ServerIds;
+}
+
+impl PpssSetup for SvrBEnv<'_> {
+    type ConnectionResults = Result<SvrConnection<SvrSgx>, Error>;
+    type ServerIds = [u64; 1];
+
+    fn server_ids() -> Self::ServerIds {
+        [1]
+    }
+}
+
 #[derive_where(Clone, Copy; Bytes)]
 pub struct MrEnclave<Bytes, E> {
     inner: Bytes,
@@ -182,6 +204,7 @@ pub struct EndpointParams<'a, E: EnclaveKind> {
 #[derive_where(Clone)]
 pub struct EnclaveEndpoint<'a, E: EnclaveKind> {
     pub domain_config: DomainConfig,
+    pub ws_config: ws::Config,
     pub params: EndpointParams<'a, E>,
 }
 
@@ -194,16 +217,18 @@ pub trait NewHandshake: EnclaveKind + Sized {
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
-    /// websocket error: {0}
-    WebSocketConnect(#[from] WebSocketServiceConnectError),
+    /// Websocket error: {0}
+    WebSocketConnect(WebSocketConnectError),
+    /// {0}
+    RateLimited(RetryLater),
     /// Network error: {0}
-    WebSocket(#[from] WebSocketServiceError),
+    WebSocket(#[from] WebSocketError),
     /// Protocol error after establishing a connection: {0}
     Protocol(AttestedProtocolError),
     /// Enclave attestation failed: {0}
     AttestationError(attest::enclave::Error),
-    /// Connection timeout
-    ConnectionTimedOut,
+    /// No connection attempts succeeded before timeout
+    AllConnectionAttemptsFailed,
 }
 
 impl LogSafeDisplay for Error {}
@@ -218,6 +243,25 @@ impl From<AttestedConnectionError> for Error {
     }
 }
 
+impl From<WebSocketServiceConnectError> for Error {
+    fn from(value: WebSocketServiceConnectError) -> Self {
+        match value {
+            WebSocketServiceConnectError::RejectedByServer {
+                response,
+                received_at: _,
+            } => {
+                if response.status() == http::StatusCode::TOO_MANY_REQUESTS {
+                    if let Some(retry_later) = extract_retry_later(response.headers()) {
+                        return Self::RateLimited(retry_later);
+                    }
+                }
+                Self::WebSocket(WebSocketError::Http(response))
+            }
+            WebSocketServiceConnectError::Connect(e, _) => Self::WebSocketConnect(e),
+        }
+    }
+}
+
 impl<E: EnclaveKind> EnclaveEndpoint<'_, E> {
     pub fn enclave_websocket_provider(
         &self,
@@ -227,6 +271,7 @@ impl<E: EnclaveKind> EnclaveEndpoint<'_, E> {
     > {
         let Self {
             domain_config,
+            ws_config: _,
             params,
         } = self;
         let http_provider = domain_config.connect.route_provider(enable_domain_fronting);
@@ -249,6 +294,7 @@ impl<E: EnclaveKind> EnclaveEndpoint<'_, E> {
     > {
         let Self {
             domain_config,
+            ws_config: _,
             params,
         } = self;
         let http_provider = domain_config
@@ -265,7 +311,7 @@ impl<E: EnclaveKind> EnclaveEndpoint<'_, E> {
     }
 }
 
-impl NewHandshake for Svr2 {
+impl NewHandshake for SvrSgx {
     fn new_handshake(
         params: &EndpointParams<Self>,
         attestation_message: &[u8],

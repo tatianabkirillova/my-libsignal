@@ -33,11 +33,6 @@ pub enum SignalProtocolError {
     /// unrecognized message version <{0}>
     UnrecognizedMessageVersion(u32),
 
-    /// fingerprint version number mismatch them {0} us {1}
-    FingerprintVersionMismatch(u32, u32),
-    /// fingerprint parsing error
-    FingerprintParsingError,
-
     /// no key type identifier
     NoKeyTypeIdentifier,
     /// bad key type <{0:#04x}>
@@ -94,6 +89,8 @@ pub enum SignalProtocolError {
     UnknownSealedSenderVersion(u8),
     /// self send of a sealed sender message
     SealedSenderSelfSend,
+    /// unknown server certificate ID: {0}
+    UnknownSealedSenderServerCertificateId(u32),
 
     /// bad KEM key type <{0:#04x}>
     BadKEMKeyType(u8),

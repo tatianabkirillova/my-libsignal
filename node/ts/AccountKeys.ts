@@ -12,10 +12,10 @@
  */
 
 import * as crypto from 'node:crypto';
-import * as Native from '../Native';
-import ByteArray from './zkgroup/internal/ByteArray';
-import { Aci } from './Address';
-import { PrivateKey } from './EcKeys';
+import Native from '../Native.js';
+import ByteArray from './zkgroup/internal/ByteArray.js';
+import { Aci } from './Address.js';
+import { PrivateKey } from './EcKeys.js';
 
 /**
  * The randomly-generated user-memorized entropy used to derive the backup key,
@@ -162,6 +162,24 @@ export class BackupKey extends ByteArray {
     return Native.BackupKey_DeriveThumbnailTransitEncryptionKey(
       this.contents,
       mediaId
+    );
+  }
+}
+
+/**
+ * A forward secrecy token used for deriving message backup keys.
+ *
+ * This token is retrieved from the server when restoring a backup and is used together
+ * with the backup key to derive the actual encryption keys for message backups.
+ */
+export class BackupForwardSecrecyToken extends ByteArray {
+  private readonly __type?: never;
+  static SIZE = 32;
+
+  constructor(contents: Uint8Array) {
+    super(
+      contents,
+      BackupForwardSecrecyToken.checkLength(BackupForwardSecrecyToken.SIZE)
     );
   }
 }

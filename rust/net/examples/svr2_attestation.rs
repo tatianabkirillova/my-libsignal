@@ -10,27 +10,20 @@
 //! Usage: `./svr2_attestation --username USERNAME --password PASSWORD | xxd`
 
 use std::io::Write;
-use std::time::Duration;
 
 use attest::enclave;
 use attest::enclave::Handshake;
 use clap::Parser as _;
-use http::uri::PathAndQuery;
 use http::HeaderName;
+use http::uri::PathAndQuery;
 use libsignal_net::auth::Auth;
 use libsignal_net::connect_state::{ConnectState, ConnectionResources, SUGGESTED_CONNECT_CONFIG};
-use libsignal_net::enclave::{EnclaveKind, EndpointParams, MrEnclave, NewHandshake, Svr2};
+use libsignal_net::enclave::{EnclaveKind, EndpointParams, MrEnclave, NewHandshake, SvrSgx};
 use libsignal_net::svr::SvrConnection;
+use libsignal_net_infra::EnableDomainFronting;
 use libsignal_net_infra::dns::DnsResolver;
 use libsignal_net_infra::route::DirectOrProxyProvider;
-use libsignal_net_infra::testutil::no_network_change_events;
-use libsignal_net_infra::EnableDomainFronting;
-
-const WS2_CONFIG: libsignal_net_infra::ws2::Config = libsignal_net_infra::ws2::Config {
-    local_idle_timeout: Duration::from_secs(10),
-    remote_idle_ping_timeout: Duration::from_secs(10),
-    remote_idle_disconnect_timeout: Duration::from_secs(30),
-};
+use libsignal_net_infra::utils::no_network_change_events;
 
 #[derive(clap::Parser)]
 struct Args {
@@ -110,17 +103,14 @@ async fn main() {
         confirmation_header_name,
     };
 
-    let params: EndpointParams<'_, LoggingNewHandshake<Svr2>> = cast_params(&env.params);
+    let params: EndpointParams<'_, LoggingNewHandshake<SvrSgx>> = cast_params(&env.params);
 
     let _connection = SvrConnection::connect(
         connection_resources,
-        DirectOrProxyProvider::maybe_proxied(
-            env.enclave_websocket_provider(EnableDomainFronting::No),
-            None,
-        ),
-        WS2_CONFIG,
+        DirectOrProxyProvider::direct(env.enclave_websocket_provider(EnableDomainFronting::No)),
+        env.ws_config,
         &params,
-        auth,
+        &auth,
     )
     .await
     .expect("can connect");

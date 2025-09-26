@@ -8,7 +8,7 @@ name = "libsignal-bridge-types"
 version = "0.1.0"
 authors.workspace = true
 license.workspace = true
-edition = "2021"
+edition = "2024"
 
 [lints]
 workspace = true
@@ -23,12 +23,14 @@ libsignal-message-backup = { workspace = true }
 libsignal-net = { workspace = true }
 libsignal-net-chat = { workspace = true }
 libsignal-protocol = { workspace = true }
+libsignal-svrb = { workspace = true }
 signal-crypto = { workspace = true }
 signal-media = { workspace = true, optional = true }
 usernames = { workspace = true }
 zkgroup = { workspace = true }
 
 aes-gcm-siv = { workspace = true }
+assert_matches = { workspace = true }
 async-trait = { workspace = true }
 atomic-take = { workspace = true }
 bytes = { workspace = true }
@@ -64,7 +66,6 @@ strum = { workspace = true }
 zerocopy = { workspace = true, optional = true }
 
 [dev-dependencies]
-assert_matches = { workspace = true }
 test-case = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "time", "macros"] }
 

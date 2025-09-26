@@ -9,8 +9,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use either::Either;
-use futures_util::stream::FuturesUnordered;
-use futures_util::{FutureExt as _, TryStreamExt as _};
+use futures_util::FutureExt as _;
 use itertools::Itertools;
 
 use crate::dns::lookup_result::LookupResult;
@@ -18,8 +17,8 @@ use crate::dns::{DnsError, DnsResolver};
 use crate::host::Host;
 use crate::route::{
     ConnectionProxyRoute, DirectOrProxyRoute, HttpProxyRouteFragment, HttpsProxyRoute,
-    HttpsTlsRoute, ProxyTarget, SocksRoute, TcpRoute, TlsRoute, UdpRoute, UnresolvedHost,
-    UsePreconnect, WebSocketRoute,
+    HttpsTlsRoute, NoiseRoute, ProxyTarget, SocksRoute, TcpRoute, TlsRoute, UdpRoute,
+    UnresolvedHost, UsePreconnect, WebSocketRoute,
 };
 
 /// A route with hostnames that can be resolved.
@@ -97,9 +96,7 @@ pub async fn resolve_route<R: ResolveHostnames + Clone + 'static>(
         })
     });
 
-    let resolved = FuturesUnordered::from_iter(to_resolve)
-        .try_collect::<Vec<_>>()
-        .await?;
+    let resolved = futures_util::future::try_join_all(to_resolve).await?;
 
     let resolutions = resolved
         .into_iter()
@@ -240,7 +237,13 @@ impl<A: ResolveHostnames> ResolveHostnames for ConnectionProxyRoute<A> {
 
     fn hostnames(&self) -> impl Iterator<Item = &UnresolvedHost> {
         match self {
-            Self::Tls { proxy } => Either::Left(Either::Left(proxy.hostnames())),
+            Self::Tls { proxy } => {
+                let hostnames = Either::Left(proxy.hostnames());
+                #[cfg(feature = "dev-util")]
+                let hostnames = Either::Left(hostnames);
+                hostnames
+            }
+            #[cfg(feature = "dev-util")]
             Self::Tcp { proxy } => Either::Left(Either::Right(proxy.hostnames())),
             Self::Socks(socks) => Either::Right(Either::Right(socks.hostnames())),
             Self::Https(http) => Either::Right(Either::Left(http.hostnames())),
@@ -252,6 +255,7 @@ impl<A: ResolveHostnames> ResolveHostnames for ConnectionProxyRoute<A> {
             ConnectionProxyRoute::Tls { proxy } => ConnectionProxyRoute::Tls {
                 proxy: proxy.resolve(lookup),
             },
+            #[cfg(feature = "dev-util")]
             ConnectionProxyRoute::Tcp { proxy } => ConnectionProxyRoute::Tcp {
                 proxy: proxy.resolve(lookup),
             },
@@ -362,6 +366,20 @@ impl<A: ResolveHostnames> ProxyTarget<A> {
     }
 }
 
+impl<A: ResolveHostnames, N> ResolveHostnames for NoiseRoute<N, A> {
+    type Resolved = NoiseRoute<N, A::Resolved>;
+    fn hostnames(&self) -> impl Iterator<Item = &UnresolvedHost> {
+        self.inner.hostnames()
+    }
+    fn resolve(self, lookup: impl FnMut(&str) -> IpAddr) -> Self::Resolved {
+        let Self { inner, fragment } = self;
+        Self::Resolved {
+            inner: inner.resolve(lookup),
+            fragment,
+        }
+    }
+}
+
 macro_rules! impl_resolved_route {
     ($typ:ident, $delegate_field:ident) => {
         impl<A: ResolvedRoute> ResolvedRoute for $typ<A> {
@@ -399,6 +417,7 @@ impl<A: ResolvedRoute> ResolvedRoute for ConnectionProxyRoute<A> {
     fn immediate_target(&self) -> &IpAddr {
         match self {
             ConnectionProxyRoute::Tls { proxy } => proxy.immediate_target(),
+            #[cfg(feature = "dev-util")]
             ConnectionProxyRoute::Tcp { proxy } => proxy.immediate_target(),
             ConnectionProxyRoute::Socks(proxy) => proxy.immediate_target(),
             ConnectionProxyRoute::Https(proxy) => proxy.immediate_target(),
@@ -426,6 +445,12 @@ impl<L: ResolvedRoute, R: ResolvedRoute> ResolvedRoute for Either<L, R> {
                 ResolvedRoute::immediate_target,
             )
             .into_inner()
+    }
+}
+
+impl<N, A: ResolvedRoute> ResolvedRoute for NoiseRoute<N, A> {
+    fn immediate_target(&self) -> &IpAddr {
+        self.inner.immediate_target()
     }
 }
 
@@ -495,7 +520,7 @@ mod test {
 
     use assert_matches::assert_matches;
     use const_str::ip_addr;
-    use futures_util::{pin_mut, FutureExt as _, StreamExt as _};
+    use futures_util::{FutureExt as _, StreamExt as _, pin_mut};
     use nonzero_ext::nonzero;
 
     use super::*;

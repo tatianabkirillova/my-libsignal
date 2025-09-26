@@ -8,8 +8,8 @@ name = "libsignal-protocol"
 version = "0.1.0"
 authors.workspace = true
 license.workspace = true
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.85"
 
 [lints]
 workspace = true
@@ -20,10 +20,12 @@ signal-crypto = { workspace = true }
 
 aes = { workspace = true, features = ["zeroize"] }
 aes-gcm-siv = { workspace = true }
-arrayref = { workspace = true }
 assert_matches = { workspace = true }
 async-trait = { workspace = true }
+bitflags = { workspace = true }
+const-str = { workspace = true }
 ctr = { workspace = true, features = ["zeroize"] }
+data-encoding-macro = { workspace = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true, features = ["deref", "from", "into", "try_from"] }
 displaydoc = { workspace = true }
@@ -54,8 +56,8 @@ mlkem1024 = []
 
 [dev-dependencies]
 clap = { workspace = true, features = ["derive"] }
-const-str = { workspace = true }
 criterion = { workspace = true }
+curve25519-dalek = { workspace = true, features = ["digest"] }
 env_logger = { workspace = true }
 futures-util = { workspace = true }
 proptest = { workspace = true }

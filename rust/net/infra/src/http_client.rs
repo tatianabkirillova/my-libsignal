@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use http::HeaderMap;
 use http::response::Parts;
 use http::uri::PathAndQuery;
-use http::HeaderMap;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::client::conn::http2;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -16,7 +16,7 @@ use static_assertions::assert_impl_all;
 
 use crate::errors::{LogSafeDisplay, TransportConnectError};
 use crate::route::{Connector, HttpRouteFragment, HttpsTlsRoute};
-use crate::{AsyncDuplexStream, Connection, TransportInfo};
+use crate::{AsyncDuplexStream, Connection};
 
 #[derive(displaydoc::Display, Debug)]
 pub enum HttpError {
@@ -97,7 +97,7 @@ impl AggregatingHttp2Client {
 
         let content = match content_length {
             Some(content_length) if content_length > self.max_response_size => {
-                return Err(HttpError::ResponseTooLarge)
+                return Err(HttpError::ResponseTooLarge);
             }
             Some(content_length) => Limited::new(body, content_length)
                 .collect()
@@ -148,7 +148,7 @@ where
         &self,
         over: Inner,
         route: HttpsTlsRoute<T>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> Result<Self::Connection, Self::Error> {
         let HttpsTlsRoute {
             fragment:
@@ -160,10 +160,7 @@ where
             inner: tls_target,
         } = route;
 
-        let ssl_stream = self
-            .inner
-            .connect_over(over, tls_target, log_tag.clone())
-            .await?;
+        let ssl_stream = self.inner.connect_over(over, tls_target, log_tag).await?;
         let info = ssl_stream.transport_info();
         let io = TokioIo::new(ssl_stream);
         let (sender, connection) = http2::handshake::<_, _, Full<Bytes>>(TokioExecutor::new(), io)
@@ -173,7 +170,8 @@ where
         // Starting a thread to drive client connection events.
         // The task will complete once the connection is closed due to an error
         // or if all clients are dropped.
-        let TransportInfo { ip_version, .. } = info;
+        let log_tag = log_tag.to_owned();
+        let ip_version = info.ip_version();
         tokio::spawn(async move {
             match connection.await {
                 Ok(_) => log::info!("[{log_tag}] HTTP2 connection [{ip_version}] closed"),
@@ -199,7 +197,7 @@ mod test {
     use std::net::{IpAddr, Ipv6Addr, SocketAddr};
     use std::num::NonZeroU16;
     use std::ops::ControlFlow;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use assert_matches::assert_matches;
     use http::{HeaderName, HeaderValue, Method, StatusCode};
@@ -254,14 +252,15 @@ mod test {
         server.bind_ephemeral((Ipv6Addr::LOCALHOST, 0))
     }
 
-    fn outcome_record_for_testing(
-    ) -> tokio::sync::RwLock<ConnectionOutcomes<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>>> {
+    fn outcome_record_for_testing()
+    -> tokio::sync::RwLock<ConnectionOutcomes<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>>> {
         const MAX_DELAY: Duration = Duration::from_secs(100);
         const AGE_CUTOFF: Duration = Duration::from_secs(1000);
         const MAX_COUNT: u8 = 5;
 
         ConnectionOutcomes::new(ConnectionOutcomeParams {
-            age_cutoff: AGE_CUTOFF,
+            short_term_age_cutoff: AGE_CUTOFF,
+            long_term_age_cutoff: AGE_CUTOFF,
             cooldown_growth_factor: 2.0,
             count_growth_factor: 10.0,
             max_count: MAX_COUNT,
@@ -277,7 +276,7 @@ mod test {
             ConnectionOutcomes<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>>,
         >,
         max_response_size: usize,
-        log_tag: &Arc<str>,
+        log_tag: &str,
     ) -> Result<AggregatingHttp2Client, HttpError> {
         let mut outcome_record_snapshot = outcome_record.read().await.clone();
         let tls_connector = crate::route::ComposedConnector::new(
@@ -293,7 +292,7 @@ mod test {
             &mut outcome_record_snapshot,
             connector,
             (),
-            log_tag.clone(),
+            log_tag,
             |e| match e {
                 HttpConnectError::Transport(t) => {
                     log::info!(
@@ -309,10 +308,11 @@ mod test {
         )
         .await;
 
-        outcome_record
-            .write()
-            .await
-            .apply_outcome_updates(updates.outcomes, updates.finished_at);
+        outcome_record.write().await.apply_outcome_updates(
+            updates.outcomes,
+            updates.finished_at,
+            SystemTime::now(),
+        );
 
         result.map_err(|e| match e {
             ConnectError::AllAttemptsFailed | ConnectError::NoResolvedRoutes => {
@@ -357,7 +357,7 @@ mod test {
             }],
             &outcome_record_for_testing(),
             MAX_RESPONSE_SIZE,
-            &"test".into(),
+            "test",
         )
         .await
         .expect("can connect");
@@ -434,7 +434,7 @@ mod test {
             }],
             &outcome_record_for_testing(),
             MAX_RESPONSE_SIZE,
-            &"test".into(),
+            "test",
         )
         .await
         .expect("can connect");

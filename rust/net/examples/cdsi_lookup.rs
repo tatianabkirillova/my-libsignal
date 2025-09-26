@@ -12,9 +12,9 @@ use libsignal_net::auth::Auth;
 use libsignal_net::cdsi::{CdsiConnection, LookupError, LookupRequest, LookupResponse};
 use libsignal_net::connect_state::{ConnectState, ConnectionResources, SUGGESTED_CONNECT_CONFIG};
 use libsignal_net::infra::dns::DnsResolver;
-use libsignal_net_infra::route::DirectOrProxyProvider;
-use libsignal_net_infra::testutil::no_network_change_events;
 use libsignal_net_infra::EnableDomainFronting;
+use libsignal_net_infra::route::DirectOrProxyProvider;
+use libsignal_net_infra::utils::no_network_change_events;
 use tokio::io::AsyncBufReadExt as _;
 
 async fn cdsi_lookup(
@@ -24,7 +24,7 @@ async fn cdsi_lookup(
 ) -> Result<LookupResponse, LookupError> {
     let (_token, remaining_response) = libsignal_net::infra::utils::timeout(
         timeout,
-        LookupError::ConnectionTimedOut,
+        LookupError::AllConnectionAttemptsFailed,
         cdsi.send_request(request),
     )
     .await?;
@@ -48,12 +48,6 @@ struct CliArgs {
     #[arg(long, default_value_t = Environment::Prod)]
     environment: Environment,
 }
-
-const WS2_CONFIG: libsignal_net_infra::ws2::Config = libsignal_net_infra::ws2::Config {
-    local_idle_timeout: Duration::from_secs(10),
-    remote_idle_ping_timeout: Duration::from_secs(10),
-    remote_idle_disconnect_timeout: Duration::from_secs(30),
-};
 
 #[tokio::main]
 async fn main() {
@@ -102,13 +96,12 @@ async fn main() {
 
         CdsiConnection::connect_with(
             connection_resources,
-            DirectOrProxyProvider::maybe_proxied(
+            DirectOrProxyProvider::direct(
                 cdsi_env.enclave_websocket_provider(EnableDomainFronting::No),
-                None,
             ),
-            WS2_CONFIG,
+            cdsi_env.ws_config,
             &cdsi_env.params,
-            auth,
+            &auth,
         )
         .await
     }

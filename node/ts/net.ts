@@ -4,20 +4,27 @@
 //
 
 import type { ReadonlyDeep } from 'type-fest';
-import * as Native from '../Native';
-import { cdsiLookup, CDSRequestOptionsType, CDSResponseType } from './net/CDSI';
+import Native from '../Native.js';
+import {
+  cdsiLookup,
+  CDSRequestOptionsType,
+  CDSResponseType,
+} from './net/CDSI.js';
 import {
   ChatConnection,
   ConnectionEventsListener,
   UnauthenticatedChatConnection,
   AuthenticatedChatConnection,
   ChatServiceListener,
-} from './net/Chat';
-import { RegistrationService } from './net/Registration';
-import { BridgedStringMap, newNativeHandle } from './internal';
-export * from './net/CDSI';
-export * from './net/Chat';
-export * from './net/Registration';
+} from './net/Chat.js';
+import { RegistrationService } from './net/Registration.js';
+import { SvrB } from './net/SvrB.js';
+import { BridgedStringMap, newNativeHandle } from './internal.js';
+export * from './net/CDSI.js';
+export * from './net/Chat.js';
+export * from './net/chat/UnauthUsernamesService.js';
+export * from './net/Registration.js';
+export * from './net/SvrB.js';
 
 // This must match the libsignal-bridge Rust enum of the same name.
 export enum Environment {
@@ -81,6 +88,7 @@ export type NetConstructorOptions = Readonly<
       TESTING_localServer_chatPort: number;
       TESTING_localServer_cdsiPort: number;
       TESTING_localServer_svr2Port: number;
+      TESTING_localServer_svrBPort: number;
       TESTING_localServer_rootCertificateDer: Uint8Array;
     }
 >;
@@ -112,6 +120,7 @@ export class Net {
           options.TESTING_localServer_chatPort,
           options.TESTING_localServer_cdsiPort,
           options.TESTING_localServer_svr2Port,
+          options.TESTING_localServer_svrBPort,
           options.TESTING_localServer_rootCertificateDer
         )
       );
@@ -157,9 +166,9 @@ export class Net {
    * @param listener the listener for incoming events.
    * @param options additional options to pass through.
    * @param options.languages If provided, a list of languages in Accept-Language syntax to apply
-   * to all requests made on this connection.
+   * to all requests made on this connection. Note that "quality weighting" can be left out; the
+   * Signal server will always consider the list to be in priority order.
    * @param options.abortSignal an {@link AbortSignal} that will cancel the connection attempt.
-   * @returns the connected listener, if the connection succeeds.
    */
   public async connectUnauthenticatedChat(
     listener: ConnectionEventsListener,
@@ -177,6 +186,17 @@ export class Net {
 
   /**
    * Creates a new instance of {@link AuthenticatedChatConnection}.
+   *
+   * @param username the identifier for the local device
+   * @param password the password for the local device
+   * @param receiveStories whether or not the local user has Stories enabled, so the server can
+   * filter them out ahead of time
+   * @param listener the listener for incoming events.
+   * @param options additional options to pass through.
+   * @param options.languages If provided, a list of languages in Accept-Language syntax to apply
+   * to all requests made on this connection. Note that "quality weighting" can be left out; the
+   * Signal server will always consider the list to be in priority order.
+   * @param options.abortSignal an {@link AbortSignal} that will cancel the connection attempt.
    */
   public connectAuthenticatedChat(
     username: string,
@@ -416,7 +436,7 @@ export class Net {
    *
    * @param remoteConfig A map containing preprocessed libsignal configuration keys and their associated values.
    */
-  setRemoteConfig(remoteConfig: Map<string, string>): void {
+  setRemoteConfig(remoteConfig: ReadonlyMap<string, string>): void {
     Native.ConnectionManager_set_remote_config(
       this._connectionManager,
       new BridgedStringMap(remoteConfig)
@@ -444,5 +464,25 @@ export class Net {
       auth,
       options
     );
+  }
+
+  /**
+   * Get the SVR-B (Secure Value Recovery for Backups) service for this network instance.
+   *
+   * SVR-B provides forward secrecy for Signal backups, ensuring that even if the user's
+   * Account Entropy Pool or Backup Key is compromised, the attacker cannot
+   * compromise all past backups. This is achieved by storing the forward
+   * secrecy token in a secure enclave inside the SVR-B server, which provably
+   * attests that it only stores a single token at a time for each user.
+   *
+   * @param auth The authentication credentials to use when connecting to the SVR-B server.
+   * @returns An SvrB service instance configured for this network environment
+   * @see {@link SvrB}
+   */
+  svrB(auth: Readonly<ServiceAuth>): SvrB {
+    const env = this.options.localTestServer
+      ? Environment.Staging
+      : this.options.env;
+    return new SvrB(this.asyncContext, this._connectionManager, auth, env);
   }
 }

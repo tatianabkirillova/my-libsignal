@@ -64,76 +64,83 @@ enum IdentityChange {
 }
 
 type IdentityKeyStore = {
-  _getIdentityKey(): Promise<PrivateKey>;
-  _getLocalRegistrationId(): Promise<number>;
-  _saveIdentity(name: ProtocolAddress, key: PublicKey): Promise<IdentityChange>;
-  _isTrustedIdentity(
+  _getIdentityKey: () => Promise<PrivateKey>;
+  _getLocalRegistrationId: () => Promise<number>;
+  _saveIdentity: (
+    name: ProtocolAddress,
+    key: PublicKey
+  ) => Promise<IdentityChange>;
+  _isTrustedIdentity: (
     name: ProtocolAddress,
     key: PublicKey,
     sending: boolean
-  ): Promise<boolean>;
-  _getIdentity(name: ProtocolAddress): Promise<PublicKey | null>;
+  ) => Promise<boolean>;
+  _getIdentity: (name: ProtocolAddress) => Promise<PublicKey | null>;
 };
 
 type SessionStore = {
-  _saveSession(addr: ProtocolAddress, record: SessionRecord): Promise<void>;
-  _getSession(addr: ProtocolAddress): Promise<SessionRecord | null>;
+  _saveSession: (addr: ProtocolAddress, record: SessionRecord) => Promise<void>;
+  _getSession: (addr: ProtocolAddress) => Promise<SessionRecord | null>;
 };
 
 type PreKeyStore = {
-  _savePreKey(preKeyId: number, record: PreKeyRecord): Promise<void>;
-  _getPreKey(preKeyId: number): Promise<PreKeyRecord>;
-  _removePreKey(preKeyId: number): Promise<void>;
+  _savePreKey: (preKeyId: number, record: PreKeyRecord) => Promise<void>;
+  _getPreKey: (preKeyId: number) => Promise<PreKeyRecord>;
+  _removePreKey: (preKeyId: number) => Promise<void>;
 };
 
 type SignedPreKeyStore = {
-  _saveSignedPreKey(
+  _saveSignedPreKey: (
     signedPreKeyId: number,
     record: SignedPreKeyRecord
-  ): Promise<void>;
-  _getSignedPreKey(signedPreKeyId: number): Promise<SignedPreKeyRecord>;
+  ) => Promise<void>;
+  _getSignedPreKey: (signedPreKeyId: number) => Promise<SignedPreKeyRecord>;
 };
 
 type KyberPreKeyStore = {
-  _saveKyberPreKey(
+  _saveKyberPreKey: (
     kyberPreKeyId: number,
     record: KyberPreKeyRecord
-  ): Promise<void>;
-  _getKyberPreKey(kyberPreKeyId: number): Promise<KyberPreKeyRecord>;
-  _markKyberPreKeyUsed(kyberPreKeyId: number): Promise<void>;
+  ) => Promise<void>;
+  _getKyberPreKey: (kyberPreKeyId: number) => Promise<KyberPreKeyRecord>;
+  _markKyberPreKeyUsed: (
+    kyberPreKeyId: number,
+    signedPreKeyId: number,
+    baseKey: PublicKey
+  ) => Promise<void>;
 };
 
 type SenderKeyStore = {
-  _saveSenderKey(
+  _saveSenderKey: (
     sender: ProtocolAddress,
     distributionId: Uuid,
     record: SenderKeyRecord
-  ): Promise<void>;
-  _getSenderKey(
+  ) => Promise<void>;
+  _getSenderKey: (
     sender: ProtocolAddress,
     distributionId: Uuid
-  ): Promise<SenderKeyRecord | null>;
+  ) => Promise<SenderKeyRecord | null>;
 };
 
 type InputStream = {
-  _read(amount: number): Promise<Uint8Array>;
-  _skip(amount: number): Promise<void>;
+  _read: (amount: number) => Promise<Uint8Array>;
+  _skip: (amount: number) => Promise<void>;
 };
 
 type SyncInputStream = Uint8Array;
 
 type ChatListener = {
-  _incoming_message(
+  _incoming_message: (
     envelope: Uint8Array,
     timestamp: number,
     ack: ServerMessageAck
-  ): void;
-  _queue_empty(): void;
-  _received_alerts(alerts: string[]): void;
-  _connection_interrupted(
+  ) => void;
+  _queue_empty: () => void;
+  _received_alerts: (alerts: string[]) => void;
+  _connection_interrupted: (
     // A LibSignalError or null, but not naming the type to avoid circular import dependencies.
     reason: Error | null
-  ): void;
+  ) => void;
 };
 
 type ChallengeOption = 'pushChallenge' | 'captcha';
@@ -228,6 +235,11 @@ export function BackupKey_DeriveLocalBackupMetadataKey(backupKey: Uint8Array): U
 export function BackupKey_DeriveMediaEncryptionKey(backupKey: Uint8Array, mediaId: Uint8Array): Uint8Array;
 export function BackupKey_DeriveMediaId(backupKey: Uint8Array, mediaName: string): Uint8Array;
 export function BackupKey_DeriveThumbnailTransitEncryptionKey(backupKey: Uint8Array, mediaId: Uint8Array): Uint8Array;
+export function BackupRestoreResponse_GetForwardSecrecyToken(response: Wrapper<BackupRestoreResponse>): Uint8Array;
+export function BackupRestoreResponse_GetNextBackupSecretData(response: Wrapper<BackupRestoreResponse>): Uint8Array;
+export function BackupStoreResponse_GetForwardSecrecyToken(response: Wrapper<BackupStoreResponse>): Uint8Array;
+export function BackupStoreResponse_GetNextBackupSecretData(response: Wrapper<BackupStoreResponse>): Uint8Array;
+export function BackupStoreResponse_GetOpaqueMetadata(response: Wrapper<BackupStoreResponse>): Uint8Array;
 export function BridgedStringMap_insert(map: Wrapper<BridgedStringMap>, key: string, value: string): void;
 export function BridgedStringMap_new(initialCapacity: number): BridgedStringMap;
 export function CallLinkAuthCredentialPresentation_CheckValidContents(presentationBytes: Uint8Array): void;
@@ -277,8 +289,6 @@ export function CreateCallLinkCredentialRequest_IssueDeterministic(requestBytes:
 export function CreateCallLinkCredentialResponse_CheckValidContents(responseBytes: Uint8Array): void;
 export function CreateCallLinkCredential_CheckValidContents(paramsBytes: Uint8Array): void;
 export function CreateCallLinkCredential_PresentDeterministic(credentialBytes: Uint8Array, roomId: Uint8Array, userId: Uint8Array, serverParamsBytes: Uint8Array, callLinkParamsBytes: Uint8Array, randomness: Uint8Array): Uint8Array;
-export function CreateOTP(username: string, secret: Uint8Array): string;
-export function CreateOTPFromBase64(username: string, secret: string): string;
 export function DecryptionErrorMessage_Deserialize(data: Uint8Array): DecryptionErrorMessage;
 export function DecryptionErrorMessage_ExtractFromSerializedContent(bytes: Uint8Array): DecryptionErrorMessage;
 export function DecryptionErrorMessage_ForOriginalMessage(originalBytes: Uint8Array, originalType: number, originalTimestamp: Timestamp, originalSenderDeviceId: number): DecryptionErrorMessage;
@@ -348,7 +358,7 @@ export function IncrementalMac_Update(mac: Wrapper<IncrementalMac>, bytes: Uint8
 export function KeyTransparency_AciSearchKey(aci: Uint8Array): Uint8Array;
 export function KeyTransparency_Distinguished(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, lastDistinguishedTreeHead: Uint8Array | null): CancellablePromise<Uint8Array>;
 export function KeyTransparency_E164SearchKey(e164: string): Uint8Array;
-export function KeyTransparency_Monitor(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array | null, usernameHash: Uint8Array | null, accountData: Uint8Array | null, lastDistinguishedTreeHead: Uint8Array): CancellablePromise<Uint8Array>;
+export function KeyTransparency_Monitor(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array | null, usernameHash: Uint8Array | null, accountData: Uint8Array | null, lastDistinguishedTreeHead: Uint8Array, isSelfMonitor: boolean): CancellablePromise<Uint8Array>;
 export function KeyTransparency_Search(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array | null, usernameHash: Uint8Array | null, accountData: Uint8Array | null, lastDistinguishedTreeHead: Uint8Array): CancellablePromise<Uint8Array>;
 export function KeyTransparency_UsernameHashSearchKey(hash: Uint8Array): Uint8Array;
 export function KyberKeyPair_Generate(): KyberKeyPair;
@@ -373,8 +383,8 @@ export function LookupRequest_addE164(request: Wrapper<LookupRequest>, e164: str
 export function LookupRequest_addPreviousE164(request: Wrapper<LookupRequest>, e164: string): void;
 export function LookupRequest_new(): LookupRequest;
 export function LookupRequest_setToken(request: Wrapper<LookupRequest>, token: Uint8Array): void;
-export function MessageBackupKey_FromAccountEntropyPool(accountEntropy: AccountEntropyPool, aci: Uint8Array): MessageBackupKey;
-export function MessageBackupKey_FromBackupKeyAndBackupId(backupKey: Uint8Array, backupId: Uint8Array): MessageBackupKey;
+export function MessageBackupKey_FromAccountEntropyPool(accountEntropy: AccountEntropyPool, aci: Uint8Array, forwardSecrecyToken: Uint8Array | null): MessageBackupKey;
+export function MessageBackupKey_FromBackupKeyAndBackupId(backupKey: Uint8Array, backupId: Uint8Array, forwardSecrecyToken: Uint8Array | null): MessageBackupKey;
 export function MessageBackupKey_GetAesKey(key: Wrapper<MessageBackupKey>): Uint8Array;
 export function MessageBackupKey_GetHmacKey(key: Wrapper<MessageBackupKey>): Uint8Array;
 export function MessageBackupValidator_Validate(key: Wrapper<MessageBackupKey>, firstStream: InputStream, secondStream: InputStream, len: bigint, purpose: number): Promise<MessageBackupValidationOutcome>;
@@ -416,6 +426,7 @@ export function PrivateKey_Agree(privateKey: Wrapper<PrivateKey>, publicKey: Wra
 export function PrivateKey_Deserialize(data: Uint8Array): PrivateKey;
 export function PrivateKey_Generate(): PrivateKey;
 export function PrivateKey_GetPublicKey(k: Wrapper<PrivateKey>): PublicKey;
+export function PrivateKey_HpkeOpen(sk: Wrapper<PrivateKey>, ciphertext: Uint8Array, info: Uint8Array, associatedData: Uint8Array): Uint8Array;
 export function PrivateKey_Serialize(obj: Wrapper<PrivateKey>): Uint8Array;
 export function PrivateKey_Sign(key: Wrapper<PrivateKey>, message: Uint8Array): Uint8Array;
 export function ProfileKeyCiphertext_CheckValidContents(buffer: Uint8Array): void;
@@ -437,6 +448,7 @@ export function PublicKey_Compare(key1: Wrapper<PublicKey>, key2: Wrapper<Public
 export function PublicKey_Deserialize(data: Uint8Array): PublicKey;
 export function PublicKey_Equals(lhs: Wrapper<PublicKey>, rhs: Wrapper<PublicKey>): boolean;
 export function PublicKey_GetPublicKeyBytes(obj: Wrapper<PublicKey>): Uint8Array;
+export function PublicKey_HpkeSeal(pk: Wrapper<PublicKey>, plaintext: Uint8Array, info: Uint8Array, associatedData: Uint8Array): Uint8Array;
 export function PublicKey_Serialize(obj: Wrapper<PublicKey>): Uint8Array;
 export function PublicKey_Verify(key: Wrapper<PublicKey>, message: Uint8Array, signature: Uint8Array): boolean;
 export function ReceiptCredentialPresentation_CheckValidContents(buffer: Uint8Array): void;
@@ -496,6 +508,10 @@ export function SealedSender_DecryptToUsmc(ctext: Uint8Array, identityStore: Ide
 export function SealedSender_Encrypt(destination: Wrapper<ProtocolAddress>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Uint8Array>;
 export function SealedSender_MultiRecipientEncrypt(recipients: Wrapper<ProtocolAddress>[], recipientSessions: Wrapper<SessionRecord>[], excludedRecipients: Uint8Array, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Uint8Array>;
 export function SealedSender_MultiRecipientMessageForSingleRecipient(encodedMultiRecipientMessage: Uint8Array): Uint8Array;
+export function SecureValueRecoveryForBackups_CreateNewBackupChain(environment: number, backupKey: Uint8Array): Uint8Array;
+export function SecureValueRecoveryForBackups_RemoveBackup(asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>, username: string, password: string): CancellablePromise<void>;
+export function SecureValueRecoveryForBackups_RestoreBackupFromServer(asyncRuntime: Wrapper<TokioAsyncContext>, backupKey: Uint8Array, metadata: Uint8Array, connectionManager: Wrapper<ConnectionManager>, username: string, password: string): CancellablePromise<BackupRestoreResponse>;
+export function SecureValueRecoveryForBackups_StoreBackup(asyncRuntime: Wrapper<TokioAsyncContext>, backupKey: Uint8Array, previousSecretData: Uint8Array, connectionManager: Wrapper<ConnectionManager>, username: string, password: string): CancellablePromise<BackupStoreResponse>;
 export function SenderCertificate_Deserialize(data: Uint8Array): SenderCertificate;
 export function SenderCertificate_GetCertificate(obj: Wrapper<SenderCertificate>): Uint8Array;
 export function SenderCertificate_GetDeviceId(obj: Wrapper<SenderCertificate>): number;
@@ -507,7 +523,7 @@ export function SenderCertificate_GetSerialized(obj: Wrapper<SenderCertificate>)
 export function SenderCertificate_GetServerCertificate(cert: Wrapper<SenderCertificate>): ServerCertificate;
 export function SenderCertificate_GetSignature(obj: Wrapper<SenderCertificate>): Uint8Array;
 export function SenderCertificate_New(senderUuid: string, senderE164: string | null, senderDeviceId: number, senderKey: Wrapper<PublicKey>, expiration: Timestamp, signerCert: Wrapper<ServerCertificate>, signerKey: Wrapper<PrivateKey>): SenderCertificate;
-export function SenderCertificate_Validate(cert: Wrapper<SenderCertificate>, key: Wrapper<PublicKey>, time: Timestamp): boolean;
+export function SenderCertificate_Validate(cert: Wrapper<SenderCertificate>, trustRoots: Wrapper<PublicKey>[], time: Timestamp): boolean;
 export function SenderKeyDistributionMessage_Create(sender: Wrapper<ProtocolAddress>, distributionId: Uuid, store: SenderKeyStore): Promise<SenderKeyDistributionMessage>;
 export function SenderKeyDistributionMessage_Deserialize(data: Uint8Array): SenderKeyDistributionMessage;
 export function SenderKeyDistributionMessage_GetChainId(obj: Wrapper<SenderKeyDistributionMessage>): number;
@@ -607,8 +623,10 @@ export function TESTING_ChatRequestGetPath(request: Wrapper<HttpRequest>): strin
 export function TESTING_ChatResponseConvert(bodyPresent: boolean): ChatResponse;
 export function TESTING_ChatSendErrorConvert(errorDescription: string): void;
 export function TESTING_ConnectionManager_isUsingProxy(manager: Wrapper<ConnectionManager>): number;
-export function TESTING_ConnectionManager_newLocalOverride(userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, rootCertificateDer: Uint8Array): ConnectionManager;
+export function TESTING_ConnectionManager_newLocalOverride(userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, svrBPort: number, rootCertificateDer: Uint8Array): ConnectionManager;
 export function TESTING_ConvertOptionalUuid(present: boolean): Uuid | null;
+export function TESTING_CreateOTP(username: string, secret: Uint8Array): string;
+export function TESTING_CreateOTPFromBase64(username: string, secret: string): string;
 export function TESTING_ErrorOnBorrowAsync(_input: null): Promise<void>;
 export function TESTING_ErrorOnBorrowIo(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _input: null): CancellablePromise<void>;
 export function TESTING_ErrorOnBorrowSync(_input: null): void;
@@ -676,6 +694,8 @@ export function TESTING_RoundTripU8(input: number): number;
 export function TESTING_ServerMessageAck_Create(): ServerMessageAck;
 export function TESTING_SignedPublicPreKey_CheckBridgesCorrectly(sourcePublicKey: Wrapper<PublicKey>, signedPreKey: SignedPublicPreKey): void;
 export function TESTING_TestingHandleType_getValue(handle: Wrapper<TestingHandleType>): number;
+export function TESTING_TokioAsyncContext_FutureSuccessBytes(asyncRuntime: Wrapper<TokioAsyncContext>, count: number): CancellablePromise<Uint8Array>;
+export function TESTING_TokioAsyncContext_NewSingleThreaded(): TokioAsyncContext;
 export function TESTING_TokioAsyncFuture(asyncRuntime: Wrapper<TokioAsyncContext>, input: number): CancellablePromise<number>;
 export function TestingSemaphore_AddPermits(semaphore: Wrapper<TestingSemaphore>, permits: number): void;
 export function TestingSemaphore_New(initial: number): TestingSemaphore;
@@ -687,6 +707,7 @@ export function UnauthenticatedChatConnection_connect(asyncRuntime: Wrapper<Toki
 export function UnauthenticatedChatConnection_disconnect(asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>): CancellablePromise<void>;
 export function UnauthenticatedChatConnection_info(chat: Wrapper<UnauthenticatedChatConnection>): ChatConnectionInfo;
 export function UnauthenticatedChatConnection_init_listener(chat: Wrapper<UnauthenticatedChatConnection>, listener: ChatListener): void;
+export function UnauthenticatedChatConnection_look_up_username_hash(asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, hash: Uint8Array): CancellablePromise<Uuid | null>;
 export function UnauthenticatedChatConnection_send(asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, httpRequest: Wrapper<HttpRequest>, timeoutMillis: number): CancellablePromise<ChatResponse>;
 export function UnidentifiedSenderMessageContent_Deserialize(data: Uint8Array): UnidentifiedSenderMessageContent;
 export function UnidentifiedSenderMessageContent_GetContentHint(m: Wrapper<UnidentifiedSenderMessageContent>): number;
@@ -712,6 +733,8 @@ export function initLogger(maxLevel: LogLevel, callback: (level: LogLevel, targe
 export function test_only_fn_returns_123(): number;
 interface Aes256GcmSiv { readonly __type: unique symbol; }
 interface AuthenticatedChatConnection { readonly __type: unique symbol; }
+interface BackupRestoreResponse { readonly __type: unique symbol; }
+interface BackupStoreResponse { readonly __type: unique symbol; }
 interface BridgedStringMap { readonly __type: unique symbol; }
 interface CdsiLookup { readonly __type: unique symbol; }
 interface ChatConnectionInfo { readonly __type: unique symbol; }

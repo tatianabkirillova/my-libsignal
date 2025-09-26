@@ -6,7 +6,7 @@
 use std::marker::PhantomData;
 
 use libsignal_net_infra::route::{RouteProvider, UnresolvedWebsocketServiceRoute};
-use libsignal_net_infra::ws2::attested::AttestedConnection;
+use libsignal_net_infra::ws::attested::AttestedConnection;
 
 use crate::auth::Auth;
 use crate::connect_state::{ConnectionResources, RouteInfo, WebSocketTransportConnectorFactory};
@@ -37,16 +37,16 @@ where
     pub async fn connect(
         connection_resources: ConnectionResources<'_, impl WebSocketTransportConnectorFactory>,
         route_provider: impl RouteProvider<Route = UnresolvedWebsocketServiceRoute>,
-        ws_config: crate::infra::ws2::Config,
+        ws_config: crate::infra::ws::Config,
         params: &EndpointParams<'_, E>,
-        auth: Auth,
+        auth: &Auth,
     ) -> Result<Self, Error> {
         connection_resources
             .connect_attested_ws(
                 route_provider,
                 auth,
-                (ws_config, crate::infra::ws::WithoutResponseHeaders::new()),
-                format!("svr3:{}", std::any::type_name::<E>()).into(),
+                ws_config,
+                format!("svr:{}", std::any::type_name::<E>()).into(),
                 params,
             )
             .await

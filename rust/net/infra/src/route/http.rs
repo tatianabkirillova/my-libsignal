@@ -8,13 +8,13 @@ use std::sync::Arc;
 
 use nonzero_ext::nonzero;
 
+use crate::Alpn;
 use crate::certs::RootCertificates;
 use crate::host::Host;
 use crate::route::{
     ReplaceFragment, RouteProvider, RouteProviderContext, SetAlpn, SimpleRoute, TcpRoute, TlsRoute,
     TlsRouteFragment, UnresolvedHost,
 };
-use crate::Alpn;
 
 pub const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443u16);
 
@@ -336,12 +336,12 @@ mod test {
                     inner: TlsRoute {
                         fragment: TlsRouteFragment {
                             root_certs: RootCertificates::Native,
-                            sni: Host::Domain("front-sni-2b".into()),
+                            sni: Host::Domain("front-sni-2a".into()),
                             alpn: Some(Alpn::Http1_1),
                             min_protocol_version: None,
                         },
                         inner: TcpRoute {
-                            address: UnresolvedHost("front-sni-2b".into()),
+                            address: UnresolvedHost("front-sni-2a".into()),
                             port: DEFAULT_HTTPS_PORT
                         },
                     }

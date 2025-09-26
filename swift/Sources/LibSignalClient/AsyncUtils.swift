@@ -68,6 +68,18 @@ extension SignalCPromiseMutPointerRegisterAccountResponse: PromiseStruct {
     typealias Result = SignalMutPointerRegisterAccountResponse
 }
 
+extension SignalCPromiseOptionalUuid: PromiseStruct {
+    typealias Result = SignalOptionalUuid
+}
+
+extension SignalCPromiseMutPointerBackupStoreResponse: PromiseStruct {
+    typealias Result = SignalMutPointerBackupStoreResponse
+}
+
+extension SignalCPromiseMutPointerBackupRestoreResponse: PromiseStruct {
+    typealias Result = SignalMutPointerBackupRestoreResponse
+}
+
 extension SignalCPromiseOwnedBufferOfc_uchar: PromiseStruct {
     typealias Result = SignalOwnedBuffer
 }

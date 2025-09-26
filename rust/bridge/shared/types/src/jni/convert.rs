@@ -8,9 +8,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use itertools::Itertools as _;
-use jni::objects::{AutoLocal, JByteBuffer, JMap, JObjectArray};
-use jni::sys::{jbyte, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
+use jni::objects::{AutoLocal, JByteBuffer, JMap, JObjectArray};
+use jni::sys::{JNI_FALSE, JNI_TRUE, jbyte};
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
 use libsignal_core::try_scoped;
 use libsignal_net::cdsi::LookupResponseEntry;
@@ -23,7 +23,7 @@ use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::ChatListener;
 use crate::net::registration::{ConnectChatBridge, RegistrationPushToken};
 use crate::protocol::KyberPublicKey;
-use crate::support::{extend_lifetime, Array, AsType, FixedLengthBincodeSerializable, Serialized};
+use crate::support::{Array, AsType, FixedLengthBincodeSerializable, Serialized, extend_lifetime};
 
 /// Converts arguments from their JNI form to their Rust form.
 ///
@@ -350,6 +350,52 @@ impl<'a> SimpleArgTypeInfo<'a> for Box<[String]> {
                 .try_collect()
         })
         .check_exceptions(env, "Box<[String]>::convert_from")
+    }
+}
+
+impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
+    for &'storage libsignal_account_keys::BackupKey
+{
+    // This needs to be a `Send`-able value so so that the async task that holds
+    // it can be migrated between threads.
+    type StoredType = libsignal_account_keys::BackupKey;
+    type ArgType = JByteArray<'param>;
+
+    fn borrow(
+        env: &mut JNIEnv<'context>,
+        foreign: &'param Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
+        use libsignal_account_keys::BACKUP_KEY_LEN;
+        let elements = unsafe { env.get_array_elements(foreign, ReleaseMode::NoCopyBack) }
+            .check_exceptions(env, "<&[u8; LEN]>::borrow")?;
+        if elements.len() != BACKUP_KEY_LEN {
+            return Err(BridgeLayerError::IncorrectArrayLength {
+                expected: BACKUP_KEY_LEN,
+                actual: elements.len(),
+            });
+        }
+        Ok(libsignal_account_keys::BackupKey(
+            zerocopy::IntoBytes::as_bytes(&*elements)
+                .try_into()
+                .expect("checked in construction"),
+        ))
+    }
+
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        stored
+    }
+}
+
+impl<'a> SimpleArgTypeInfo<'a> for libsignal_net::chat::LanguageList {
+    type ArgType = JObjectArray<'a>;
+
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        let entries = Box::<[String]>::convert_from(env, foreign)?;
+        libsignal_net::chat::LanguageList::parse(&entries)
+            .map_err(|_| BridgeLayerError::BadArgument("invalid language in list".to_owned()))
     }
 }
 
@@ -1448,6 +1494,19 @@ impl<'a> SimpleArgTypeInfo<'a> for crate::net::registration::SignedPublicPreKey 
     }
 }
 
+/// For testing purposes
+impl<'a> SimpleArgTypeInfo<'a> for ::jni::JavaVM {
+    type ArgType = JObject<'a>;
+
+    fn convert_from(
+        env: &mut jni::JNIEnv<'a>,
+        _placeholder_parameter: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        env.get_java_vm()
+            .check_exceptions(env, "JavaVM::convert_from")
+    }
+}
+
 impl<'a, T> ResultTypeInfo<'a> for Serialized<T>
 where
     T: FixedLengthBincodeSerializable + serde::Serialize,
@@ -1711,9 +1770,9 @@ fn make_object_array<'a, It>(
 ) -> Result<JObjectArray<'a>, BridgeLayerError>
 where
     It: IntoIterator<
-        Item: ResultTypeInfo<'a, ResultType: Into<JObject<'a>>>,
-        IntoIter: ExactSizeIterator,
-    >,
+            Item: ResultTypeInfo<'a, ResultType: Into<JObject<'a>>>,
+            IntoIter: ExactSizeIterator,
+        >,
 {
     let it = it.into_iter();
     let len = it.len();
@@ -1940,16 +1999,16 @@ macro_rules! jni_arg_type {
         ::jni::objects::JString<'local>
     };
     (Option<String>) => {
-        ::jni::objects::JString<'local>
+        $crate::jni::Nullable<::jni::objects::JString<'local>>
     };
     (&[u8]) => {
         ::jni::objects::JByteArray<'local>
     };
     (Option<&[u8]>) => {
-        ::jni::objects::JByteArray<'local>
+        $crate::jni::Nullable<::jni::objects::JByteArray<'local>>
     };
     (Option<Box<dyn ChatListener> >) =>{
-        jni::JavaBridgeChatListener<'local>
+        $crate::jni::Nullable<jni::JavaBridgeChatListener<'local>>
     };
     (Box<dyn ChatListener >) =>{
         jni::JavaBridgeChatListener<'local>
@@ -1978,11 +2037,17 @@ macro_rules! jni_arg_type {
     (Box<[String]>) => {
         ::jni::objects::JObjectArray<'local>
     };
-    (Option<Box<[u8]> >) => {
+    (LanguageList) => {
+        ::jni::objects::JObjectArray<'local>
+    };
+    (&BackupKey) => {
         ::jni::objects::JByteArray<'local>
     };
+    (Option<Box<[u8]> >) => {
+        $crate::jni::Nullable<::jni::objects::JByteArray<'local>>
+    };
     (Option<&[u8; $len:expr] >) => {
-        ::jni::objects::JByteArray<'local>
+        $crate::jni::Nullable<::jni::objects::JByteArray<'local>>
     };
     (ServiceId) => {
         ::jni::objects::JByteArray<'local>
@@ -2012,7 +2077,7 @@ macro_rules! jni_arg_type {
         ::jni::objects::JString<'local>
     };
     (Option<E164>) => {
-        ::jni::objects::JString<'local>
+        $crate::jni::Nullable<::jni::objects::JString<'local>>
     };
     (jni::CiphertextMessageRef) => {
         $crate::jni::JavaCiphertextMessage<'local>
@@ -2024,7 +2089,7 @@ macro_rules! jni_arg_type {
         ::paste::paste!(jni::[<Java $typ>]<'local>)
     };
     (Option<&dyn $typ:ty>) => {
-        ::paste::paste!(jni::[<Java $typ>]<'local>)
+        ::paste::paste!($crate::jni::Nullable<jni::[<Java $typ>]<'local>>)
     };
     (& $typ:ty) => {
         $crate::jni::ObjectHandle
@@ -2065,6 +2130,9 @@ macro_rules! jni_result_type {
     // and we can't match multiple tokens because Rust's macros match eagerly.
     // Therefore, if you need to return a more complicated Result or Option
     // type, you'll have to add another rule for its form.
+    (std::result::Result<$($rest:tt)+) => {
+        jni_result_type!(Result<$($rest)+)
+    };
     (Result<$typ:tt $(, $_:ty)?>) => {
         $crate::jni::Throwing<jni_result_type!($typ)>
     };
@@ -2072,22 +2140,28 @@ macro_rules! jni_result_type {
         $crate::jni::Throwing<jni_result_type!(&$typ)>
     };
     (Result<Option<&$typ:tt> $(, $_:ty)?>) => {
-        $crate::jni::Throwing<jni_result_type!(&$typ)>
+        $crate::jni::Throwing<jni_result_type!(Option<&$typ>)>
     };
     (Result<Option<$typ:tt<$($args:tt),+> > $(, $_:ty)?>) => {
-        $crate::jni::Throwing<jni_result_type!($typ<$($args),+>)>
+        $crate::jni::Throwing<jni_result_type!(Option<$typ<$($args),+> >)>
     };
     (Result<$typ:tt<$($args:tt),+> $(, $_:ty)?>) => {
         $crate::jni::Throwing<jni_result_type!($typ<$($args),+>)>
     };
+    (Option<u32>) => {
+        ::jni::sys::jint
+    };
+    (Option<u64>) => {
+        ::jni::sys::jlong
+    };
     (Option<$typ:tt>) => {
-        $crate::jni_result_type!($typ)
+        $crate::jni::Nullable<$crate::jni_result_type!($typ)>
     };
     (Option<&$typ:tt>) => {
-        $crate::jni_result_type!(&$typ)
+        $crate::jni::Nullable<$crate::jni_result_type!(&$typ)>
     };
     (Option<$typ:tt<$($args:tt),+> >) => {
-        $crate::jni_result_type!($typ<$($args),+>)
+        $crate::jni::Nullable<$crate::jni_result_type!($typ<$($args),+>)>
     };
     (()) => {
         ()
@@ -2107,9 +2181,6 @@ macro_rules! jni_result_type {
         ::jni::sys::jint
     };
     (u32) => {
-        ::jni::sys::jint
-    };
-    (Option<u32>) => {
         ::jni::sys::jint
     };
     (u64) => {

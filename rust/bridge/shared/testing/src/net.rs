@@ -5,13 +5,14 @@
 
 use std::num::NonZeroU16;
 
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use libsignal_bridge_macros::*;
 use libsignal_bridge_types::net::chat::ServerMessageAck;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_core::E164;
 use libsignal_net::cdsi::{CdsiProtocolError, LookupError, LookupResponse, LookupResponseEntry};
 use libsignal_net::infra::errors::RetryLater;
-use libsignal_net::infra::ws2::attested::AttestedProtocolError;
+use libsignal_net::infra::ws::attested::AttestedProtocolError;
 use libsignal_protocol::{Aci, Pni};
 use nonzero_ext::nonzero;
 use uuid::Uuid;
@@ -88,14 +89,12 @@ make_error_testing_enum! {
         EnclaveProtocol => Protocol,
         CdsiProtocol => CdsiProtocol,
         AttestationError => AttestationDataError,
-        InvalidResponse => InvalidResponse,
         RateLimited => RetryAfter42Seconds,
         InvalidToken => InvalidToken,
         InvalidArgument => InvalidArgument,
-        ParseError => Parse,
-        ConnectTransport => ConnectDnsFailed,
+        ConnectTransport => TcpConnectFailed,
         WebSocket => WebSocketIdleTooLong,
-        ConnectionTimedOut => ConnectionTimedOut,
+        AllConnectionAttemptsFailed => AllConnectionAttemptsFailed,
         Server => ServerCrashed,
     }
 }
@@ -118,7 +117,6 @@ fn TESTING_CdsiLookupErrorConvert(
                 reason: "fake reason".into(),
             })
         }
-        TestingCdsiLookupError::InvalidResponse => LookupError::InvalidResponse,
         TestingCdsiLookupError::RetryAfter42Seconds => LookupError::RateLimited(RetryLater {
             retry_after_seconds: 42,
         }),
@@ -126,14 +124,15 @@ fn TESTING_CdsiLookupErrorConvert(
         TestingCdsiLookupError::InvalidArgument => LookupError::InvalidArgument {
             server_reason: "fake reason".into(),
         },
-        TestingCdsiLookupError::Parse => LookupError::ParseError,
-        TestingCdsiLookupError::ConnectDnsFailed => LookupError::ConnectTransport(
-            libsignal_net::infra::errors::TransportConnectError::DnsError,
+        TestingCdsiLookupError::TcpConnectFailed => LookupError::ConnectTransport(
+            libsignal_net::infra::errors::TransportConnectError::TcpConnectionFailed,
         ),
-        TestingCdsiLookupError::WebSocketIdleTooLong => LookupError::WebSocket(
-            libsignal_net::infra::ws::WebSocketServiceError::ChannelIdleTooLong,
-        ),
-        TestingCdsiLookupError::ConnectionTimedOut => LookupError::ConnectionTimedOut,
+        TestingCdsiLookupError::WebSocketIdleTooLong => {
+            LookupError::WebSocket(libsignal_net::infra::ws::WebSocketError::ChannelIdleTooLong)
+        }
+        TestingCdsiLookupError::AllConnectionAttemptsFailed => {
+            LookupError::AllConnectionAttemptsFailed
+        }
         TestingCdsiLookupError::ServerCrashed => LookupError::Server { reason: "crashed" },
     })
 }
@@ -149,12 +148,14 @@ fn TESTING_ConnectionManager_newLocalOverride(
     chatPort: AsType<NonZeroU16, u16>,
     cdsiPort: AsType<NonZeroU16, u16>,
     svr2Port: AsType<NonZeroU16, u16>,
+    svrBPort: AsType<NonZeroU16, u16>,
     rootCertificateDer: &[u8],
 ) -> ConnectionManager {
     let ports = net_env::LocalhostEnvPortConfig {
         chat_port: chatPort.into_inner(),
         cdsi_port: cdsiPort.into_inner(),
         svr2_port: svr2Port.into_inner(),
+        svrb_port: svrBPort.into_inner(),
     };
 
     let env = net_env::localhost_test_env_with_ports(ports, rootCertificateDer);
@@ -168,4 +169,15 @@ fn TESTING_ConnectionManager_isUsingProxy(manager: &ConnectionManager) -> i32 {
         Ok(false) => 0,
         Err(_) => -1,
     }
+}
+
+#[bridge_fn]
+fn TESTING_CreateOTP(username: String, secret: &[u8]) -> String {
+    libsignal_net::auth::Auth::otp(&username, secret, std::time::SystemTime::now())
+}
+
+#[bridge_fn]
+fn TESTING_CreateOTPFromBase64(username: String, secret: String) -> String {
+    let secret = BASE64_STANDARD.decode(secret).expect("valid base64");
+    TESTING_CreateOTP(username, &secret)
 }

@@ -15,10 +15,10 @@ use crate::dns::dns_utils::log_safe_domain;
 use crate::errors::LogSafeDisplay;
 use crate::host::Host;
 use crate::route::{
-    ConnectionProxyKind, ConnectionProxyRoute, Connector, DirectOrProxyRoute,
+    ConnectionProxyKind, ConnectionProxyRoute, Connector, DEFAULT_HTTPS_PORT, DirectOrProxyRoute,
     HttpProxyRouteFragment, HttpsProxyRoute, HttpsTlsRoute, ProxyTarget, ResolveHostnames,
     ResolvedRoute, SocksRoute, TcpRoute, TlsRoute, TransportRoute, UnresolvedHost,
-    UnresolvedTransportRoute, UnresolvedWebsocketServiceRoute, UsesTransport, DEFAULT_HTTPS_PORT,
+    UnresolvedTransportRoute, UnresolvedWebsocketServiceRoute, UsesTransport,
 };
 
 /// A type that is not itself loggable but can produce a [`LogSafeDisplay`]
@@ -61,9 +61,9 @@ pub struct DescribedRouteConnector<C>(pub C);
 /// Loggable description for a [`UnresolvedWebsocketServiceRoute`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnresolvedRouteDescription {
-    front: Option<&'static str>,
-    proxy: Option<ConnectionProxyKind>,
-    target: (Host<Arc<str>>, NonZeroU16),
+    pub front: Option<&'static str>,
+    pub proxy: Option<ConnectionProxyKind>,
+    pub target: (Host<Arc<str>>, NonZeroU16),
 }
 
 impl<R: ResolveHostnames + DescribeForLog> ResolveHostnames for ResolveWithSavedDescription<R> {
@@ -100,7 +100,7 @@ impl<R: Clone + Send, Inner, C: Connector<R, Inner>, D: Send>
         &self,
         over: Inner,
         route: WithLoggableDescription<R, D>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         self.0
             .connect_over(over, route.route, log_tag)
@@ -170,7 +170,12 @@ impl<Transport: UsesTransport<UnresolvedTransportRoute>> DescribeForLog
                 (Host::Domain(address.clone().into()), *port)
             }
             DirectOrProxyRoute::Proxy(proxy) => match proxy {
-                ConnectionProxyRoute::Tls { proxy: _ } | ConnectionProxyRoute::Tcp { proxy: _ } => {
+                ConnectionProxyRoute::Tls { proxy: _ } => {
+                    // The host is implicit; the proxy will look for the TLS SNI and resolve that.
+                    (tls_fragment.sni.clone(), DEFAULT_HTTPS_PORT)
+                }
+                #[cfg(feature = "dev-util")]
+                ConnectionProxyRoute::Tcp { proxy: _ } => {
                     // The host is implicit; the proxy will look for the TLS SNI and resolve that.
                     (tls_fragment.sni.clone(), DEFAULT_HTTPS_PORT)
                 }

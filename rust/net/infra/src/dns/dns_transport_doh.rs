@@ -4,12 +4,11 @@
 //
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
 
 use bytes::Bytes;
 use const_str::ip_addr;
-use futures_util::stream::FuturesUnordered;
 use futures_util::Stream;
+use futures_util::stream::FuturesUnordered;
 use http::uri::PathAndQuery;
 use http::{HeaderValue, Method};
 
@@ -26,7 +25,7 @@ use crate::route::{
     TlsRoute, VariableTlsTimeoutConnector,
 };
 use crate::timeouts::MIN_TLS_HANDSHAKE_TIMEOUT;
-use crate::{dns, DnsSource};
+use crate::{DnsSource, dns};
 
 pub(crate) const CLOUDFLARE_IPS: (Ipv4Addr, Ipv6Addr) = (
     ip_addr!(v4, "1.1.1.1"),
@@ -73,22 +72,19 @@ impl Connector<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>, ()> for DohTransportCo
         &self,
         _over: (),
         route: HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> Result<Self::Connection, Self::Error> {
         let connector = Http2Connector {
             inner: &self.transport_connector,
             max_response_size: MAX_RESPONSE_SIZE,
         };
-        let http_client = connector
-            .connect(route, log_tag.clone())
-            .await
-            .map_err(|e| {
-                log::error!(
-                    "[{log_tag}] Failed to create HTTP2 client: {}",
-                    &e as &dyn LogSafeDisplay
-                );
-                Error::TransportFailure
-            })?;
+        let http_client = connector.connect(route, log_tag).await.map_err(|e| {
+            log::warn!(
+                "[{log_tag}] Failed to create HTTP2 client for DNS lookup: {}",
+                &e as &dyn LogSafeDisplay
+            );
+            Error::TransportFailure
+        })?;
         Ok(DohTransport { http_client })
     }
 }

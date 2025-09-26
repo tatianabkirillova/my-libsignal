@@ -7,8 +7,10 @@ use std::num::NonZeroU16;
 
 use attest::svr2::RaftConfig;
 use const_str::ip_addr;
-use libsignal_net::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, Svr2};
-use libsignal_net::env::{ConnectionConfig, DomainConfig, Env, KeyTransConfig};
+use libsignal_net::chat::RECOMMENDED_CHAT_WS_CONFIG;
+use libsignal_net::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, SvrSgx};
+use libsignal_net::env::{ConnectionConfig, DomainConfig, Env, KeyTransConfig, SvrBEnv};
+use libsignal_net::infra::RECOMMENDED_WS_CONFIG;
 use libsignal_net::infra::certs::RootCertificates;
 
 const ENCLAVE_ID_MOCK_SERVER: &[u8] = b"0.20240911.184407";
@@ -36,6 +38,7 @@ pub(crate) struct LocalhostEnvPortConfig {
     pub(crate) chat_port: NonZeroU16,
     pub(crate) cdsi_port: NonZeroU16,
     pub(crate) svr2_port: NonZeroU16,
+    pub(crate) svrb_port: NonZeroU16,
 }
 
 const DUMMY_RAFT_CONFIG: &RaftConfig = &RaftConfig {
@@ -43,6 +46,9 @@ const DUMMY_RAFT_CONFIG: &RaftConfig = &RaftConfig {
     max_voting_replicas: 9,
     super_majority: 0,
     group_id: 17325409821474389983,
+    attestation_timeout: 604800,
+    db_version: 2,
+    simulated: false,
 };
 
 const DUMMY_CDSI_ENDPOINT_PARAMS: EndpointParams<'static, Cdsi> = EndpointParams {
@@ -50,7 +56,12 @@ const DUMMY_CDSI_ENDPOINT_PARAMS: EndpointParams<'static, Cdsi> = EndpointParams
     raft_config: (),
 };
 
-const DUMMY_SVR2_ENDPOINT_PARAMS: EndpointParams<'static, Svr2> = EndpointParams {
+const DUMMY_SVR2_ENDPOINT_PARAMS: EndpointParams<'static, SvrSgx> = EndpointParams {
+    mr_enclave: MrEnclave::new(ENCLAVE_ID_MOCK_SERVER),
+    raft_config: DUMMY_RAFT_CONFIG,
+};
+
+const DUMMY_SVRB_ENDPOINT_PARAMS: EndpointParams<'static, SvrSgx> = EndpointParams {
     mr_enclave: MrEnclave::new(ENCLAVE_ID_MOCK_SERVER),
     raft_config: DUMMY_RAFT_CONFIG,
 };
@@ -70,11 +81,13 @@ pub(crate) fn localhost_test_env_with_ports(
             ports.chat_port,
             root_certificate_der,
         ),
+        chat_ws_config: RECOMMENDED_CHAT_WS_CONFIG,
         cdsi: EnclaveEndpoint {
             domain_config: localhost_test_domain_config_with_port_and_cert(
                 ports.cdsi_port,
                 root_certificate_der,
             ),
+            ws_config: RECOMMENDED_WS_CONFIG,
             params: DUMMY_CDSI_ENDPOINT_PARAMS,
         },
         svr2: EnclaveEndpoint {
@@ -82,8 +95,20 @@ pub(crate) fn localhost_test_env_with_ports(
                 ports.svr2_port,
                 root_certificate_der,
             ),
+            ws_config: RECOMMENDED_WS_CONFIG,
             params: DUMMY_SVR2_ENDPOINT_PARAMS,
         },
+        svr_b: SvrBEnv::new(
+            EnclaveEndpoint {
+                domain_config: localhost_test_domain_config_with_port_and_cert(
+                    ports.svrb_port,
+                    root_certificate_der,
+                ),
+                ws_config: RECOMMENDED_WS_CONFIG,
+                params: DUMMY_SVRB_ENDPOINT_PARAMS,
+            },
+            [None, None, None],
+        ),
         keytrans_config: DUMMY_KEYTRANS_CONFIG,
     }
 }

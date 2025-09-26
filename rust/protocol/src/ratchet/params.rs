@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use crate::{kem, IdentityKey, IdentityKeyPair, KeyPair, PublicKey};
+use crate::{IdentityKey, IdentityKeyPair, KeyPair, PublicKey, kem};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UsePQRatchet {
     No,
     Yes,

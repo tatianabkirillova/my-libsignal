@@ -13,13 +13,17 @@ use ::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use bytes::Bytes;
 use either::Either;
 use libsignal_net_infra::route::{
-    Connector, HttpsTlsRoute, RouteProvider, RouteProviderExt, ThrottlingConnector, TransportRoute,
-    UnresolvedHttpsServiceRoute, UnresolvedWebsocketServiceRoute, UsePreconnect, WebSocketRoute,
-    WebSocketRouteFragment,
+    Connector, DefaultGetCurrentInterface, HttpsTlsRoute, RouteProvider, RouteProviderExt,
+    ThrottlingConnector, TransportRoute, UnresolvedHttpsServiceRoute,
+    UnresolvedWebsocketServiceRoute, UsePreconnect, WebSocketRoute, WebSocketRouteFragment,
 };
+use libsignal_net_infra::utils::NetworkChangeEvent;
 use libsignal_net_infra::ws::StreamWithResponseHeaders;
-use libsignal_net_infra::{AsHttpHeader, AsStaticHttpHeader, Connection, IpType, TransportInfo};
+use libsignal_net_infra::{
+    AsHttpHeader, AsStaticHttpHeader, Connection, IpType, RECOMMENDED_WS_CONFIG, TransportInfo,
+};
 use tokio_tungstenite::WebSocketStream;
+use tungstenite::protocol::WebSocketConfig;
 
 use crate::auth::Auth;
 use crate::connect_state::{
@@ -42,6 +46,13 @@ pub type ResponseProto = proto::chat_websocket::WebSocketResponseMessage;
 pub type ChatMessageType = proto::chat_websocket::web_socket_message::Type;
 
 const RECEIVE_STORIES_HEADER_NAME: &str = "x-signal-receive-stories";
+
+pub const RECOMMENDED_CHAT_WS_CONFIG: ws::Config = ws::Config {
+    local_idle_timeout: RECOMMENDED_WS_CONFIG.local_idle_timeout,
+    post_request_interface_check_timeout: Duration::MAX,
+    remote_idle_timeout: RECOMMENDED_WS_CONFIG.remote_idle_disconnect_timeout,
+    initial_request_id: 0,
+};
 
 #[derive(Debug)]
 pub struct DebugInfo {
@@ -132,25 +143,19 @@ impl AsStaticHttpHeader for ReceiveStories {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LanguageList(pub HeaderValue);
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct LanguageList(Option<HeaderValue>);
 
 impl LanguageList {
-    pub fn parse(
-        languages: &[impl Borrow<str>],
-    ) -> Result<Option<Self>, http::header::InvalidHeaderValue> {
+    pub fn parse(languages: &[impl Borrow<str>]) -> Result<Self, http::header::InvalidHeaderValue> {
         if languages.is_empty() {
-            return Ok(None);
+            return Ok(Self(None));
         }
-        Ok(Some(Self(languages.join(", ").parse()?)))
+        Ok(Self(Some(languages.join(",").parse()?)))
     }
-}
 
-impl AsStaticHttpHeader for LanguageList {
-    const HEADER_NAME: HeaderName = http::header::ACCEPT_LANGUAGE;
-
-    fn header_value(&self) -> HeaderValue {
-        self.0.clone()
+    pub fn into_header(self) -> Option<(HeaderName, HeaderValue)> {
+        self.0.map(|value| (http::header::ACCEPT_LANGUAGE, value))
     }
 }
 
@@ -178,6 +183,7 @@ pub struct PendingChatConnection<T = ChatTransportConnection> {
     connect_response_headers: http::HeaderMap,
     ws_config: ws::Config,
     route_info: RouteInfo,
+    network_change_event: NetworkChangeEvent,
     log_tag: Arc<str>,
 }
 
@@ -185,11 +191,11 @@ pub struct PendingChatConnection<T = ChatTransportConnection> {
 pub struct AuthenticatedChatHeaders {
     pub auth: Auth,
     pub receive_stories: ReceiveStories,
-    pub languages: Option<LanguageList>,
+    pub languages: LanguageList,
 }
 
 pub struct UnauthenticatedChatHeaders {
-    pub languages: Option<LanguageList>,
+    pub languages: LanguageList,
 }
 
 #[derive(derive_more::From)]
@@ -208,13 +214,18 @@ impl ChatHeaders {
             }) => Either::Left(
                 [auth.as_header(), receive_stories.as_header()]
                     .into_iter()
-                    .chain(languages.as_ref().map(AsHttpHeader::as_header)),
+                    .chain(languages.into_header()),
             ),
             ChatHeaders::Unauth(UnauthenticatedChatHeaders { languages }) => {
-                Either::Right(languages.as_ref().map(AsHttpHeader::as_header).into_iter())
+                Either::Right(languages.into_header().into_iter())
             }
         }
     }
+}
+
+pub enum EnablePermessageDeflate {
+    No,
+    Yes,
 }
 
 pub type ChatServiceRoute = UnresolvedWebsocketServiceRoute;
@@ -225,20 +236,22 @@ impl ChatConnection {
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
+        enable_permessage_deflate: EnablePermessageDeflate,
         headers: Option<ChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection, ConnectError>
     where
         TC: WebSocketTransportConnectorFactory<
-            UsePreconnect<TransportRoute>,
-            Connection = ChatTransportConnection,
-        >,
+                UsePreconnect<TransportRoute>,
+                Connection = ChatTransportConnection,
+            >,
     {
         Self::start_connect_with_transport(
             connection_resources,
             http_route_provider,
             user_agent,
             ws_config,
+            enable_permessage_deflate,
             headers,
             log_tag,
         )
@@ -251,19 +264,27 @@ impl ChatConnection {
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
+        enable_permessage_deflate: EnablePermessageDeflate,
         headers: Option<ChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection<TC::Connection>, ConnectError>
     where
         TC: WebSocketTransportConnectorFactory<UsePreconnect<TransportRoute>>,
     {
+        let network_change_event_for_established_connection =
+            connection_resources.network_change_event.clone();
         let should_preconnect = matches!(headers, Some(ChatHeaders::Auth(_)));
         let headers = headers
             .into_iter()
             .flat_map(ChatHeaders::iter_headers)
             .chain([user_agent.as_header()]);
+        let mut ws_stream_config = WebSocketConfig::default();
+        ws_stream_config.extensions.permessage_deflate = match enable_permessage_deflate {
+            EnablePermessageDeflate::Yes => Some(Default::default()),
+            EnablePermessageDeflate::No => None,
+        };
         let ws_fragment = WebSocketRouteFragment {
-            ws_config: Default::default(),
+            ws_config: ws_stream_config,
             endpoint: PathAndQuery::from_static(crate::env::constants::WEB_SOCKET_PATH),
             headers: HeaderMap::from_iter(headers),
         };
@@ -290,7 +311,7 @@ impl ChatConnection {
                 // is useful) while limiting us to one fully established connection
                 // at a time.
                 ThrottlingConnector::new(crate::infra::ws::Stateless, 1),
-                log_tag.clone(),
+                &log_tag,
             )
             .await?;
 
@@ -301,11 +322,16 @@ impl ChatConnection {
             response_headers,
         } = connection.into_inner();
 
+        if stream.get_config().extensions.permessage_deflate.is_some() {
+            log::info!("[{log_tag}] had permessage-deflate negotiation enabled")
+        }
+
         Ok(PendingChatConnection {
             connection: stream,
             connect_response_headers: response_headers,
             route_info,
             ws_config,
+            network_change_event: network_change_event_for_established_connection,
             log_tag,
         })
     }
@@ -320,19 +346,28 @@ impl ChatConnection {
             connect_response_headers,
             ws_config,
             route_info,
+            network_change_event,
             log_tag,
         } = pending;
+        let transport_info = connection.transport_info();
         Self {
             connection_info: ConnectionInfo {
                 route_info,
-                transport_info: connection.transport_info(),
+                transport_info: transport_info.clone(),
             },
             inner: ws::Chat::new(
                 tokio_runtime,
                 connection,
                 connect_response_headers,
                 ws_config,
-                log_tag,
+                ws::ConnectionConfig {
+                    log_tag,
+                    post_request_interface_check_timeout: ws_config
+                        .post_request_interface_check_timeout,
+                    transport_info,
+                    get_current_interface: DefaultGetCurrentInterface,
+                },
+                network_change_event,
                 listener,
             ),
         }
@@ -364,7 +399,7 @@ impl PendingChatConnection {
 
     pub async fn disconnect(&mut self) {
         if let Err(error) = self.connection.close(None).await {
-            log::error!(
+            log::warn!(
                 "[{}] pending chat connection disconnect failed with {error}",
                 &self.log_tag
             );
@@ -377,12 +412,12 @@ impl Display for ConnectionInfo {
         let Self {
             transport_info:
                 TransportInfo {
-                    local_port,
-                    ip_version,
+                    local_addr,
+                    remote_addr: _,
                 },
             route_info,
         } = self;
-        write!(f, "from {ip_version}:{local_port} via {route_info}")
+        write!(f, "from {local_addr} via {route_info}")
     }
 }
 
@@ -391,13 +426,13 @@ pub mod test_support {
 
     use std::time::Duration;
 
-    use libsignal_net_infra::dns::DnsResolver;
-    use libsignal_net_infra::route::ConnectionProxyConfig;
-    use libsignal_net_infra::testutil::no_network_change_events;
     use libsignal_net_infra::EnableDomainFronting;
+    use libsignal_net_infra::dns::DnsResolver;
+    use libsignal_net_infra::route::DirectOrProxyMode;
+    use libsignal_net_infra::utils::no_network_change_events;
 
     use super::*;
-    use crate::chat::{ws, ChatConnection};
+    use crate::chat::{ChatConnection, ws};
     use crate::connect_state::{
         ConnectState, DefaultConnectorFactory, PreconnectingFactory, SUGGESTED_CONNECT_CONFIG,
     };
@@ -407,7 +442,7 @@ pub mod test_support {
     pub async fn simple_chat_connection(
         env: &Env<'static>,
         enable_domain_fronting: EnableDomainFronting,
-        proxy: Option<ConnectionProxyConfig>,
+        proxy_mode: DirectOrProxyMode,
         filter_routes: impl Fn(&UnresolvedHttpsServiceRoute) -> bool,
     ) -> Result<ChatConnection, ConnectError> {
         let dns_resolver = DnsResolver::new_with_static_fallback(
@@ -415,12 +450,13 @@ pub mod test_support {
             &no_network_change_events(),
         );
 
-        let route_provider = DirectOrProxyProvider::maybe_proxied(
-            env.chat_domain_config
+        let route_provider = DirectOrProxyProvider {
+            inner: env
+                .chat_domain_config
                 .connect
                 .route_provider(enable_domain_fronting),
-            proxy,
-        )
+            mode: proxy_mode,
+        }
         .filter_routes(filter_routes);
 
         let connect = ConnectState::new_with_transport_connector(
@@ -432,6 +468,7 @@ pub mod test_support {
         let ws_config = ws::Config {
             initial_request_id: 0,
             local_idle_timeout: Duration::from_secs(60),
+            post_request_interface_check_timeout: Duration::MAX,
             remote_idle_timeout: Duration::from_secs(60),
         };
 
@@ -451,6 +488,7 @@ pub mod test_support {
             route_provider,
             &user_agent,
             ws_config,
+            EnablePermessageDeflate::No,
             None,
             "test",
         )
@@ -474,19 +512,19 @@ pub(crate) mod test {
     use assert_matches::assert_matches;
     use http::{HeaderName, HeaderValue};
     use itertools::Itertools;
+    use libsignal_net_infra::Alpn;
     use libsignal_net_infra::certs::RootCertificates;
-    use libsignal_net_infra::dns::lookup_result::LookupResult;
     use libsignal_net_infra::dns::DnsResolver;
+    use libsignal_net_infra::dns::lookup_result::LookupResult;
     use libsignal_net_infra::errors::{RetryLater, TransportConnectError};
     use libsignal_net_infra::host::Host;
     use libsignal_net_infra::route::testutils::ConnectFn;
     use libsignal_net_infra::route::{
-        DirectOrProxyRoute, HttpRouteFragment, HttpsTlsRoute, PreconnectingFactory, TcpRoute,
-        TlsRoute, TlsRouteFragment, UnresolvedHost, DEFAULT_HTTPS_PORT,
+        DEFAULT_HTTPS_PORT, DirectOrProxyRoute, HttpRouteFragment, HttpsTlsRoute,
+        PreconnectingFactory, TcpRoute, TlsRoute, TlsRouteFragment, UnresolvedHost,
     };
-    use libsignal_net_infra::testutil::no_network_change_events;
+    use libsignal_net_infra::utils::no_network_change_events;
     use libsignal_net_infra::ws::WebSocketConnectError;
-    use libsignal_net_infra::Alpn;
     use test_case::test_case;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -674,7 +712,7 @@ pub(crate) mod test {
         let client = std::sync::Mutex::new(Some(client));
         let connect_state = ConnectState::new_with_transport_connector(
             SUGGESTED_CONNECT_CONFIG,
-            ConnectFn(|_inner, _route, _log_tag| {
+            ConnectFn(|_inner, _route| {
                 std::future::ready(client.lock().expect("unpoisoned").take().ok_or(
                     WebSocketConnectError::Transport(TransportConnectError::TcpConnectionFailed),
                 ))
@@ -717,9 +755,11 @@ pub(crate) mod test {
             ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
+                post_request_interface_check_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
+            EnablePermessageDeflate::No,
             None,
             "fake chat",
         )
@@ -735,7 +775,7 @@ pub(crate) mod test {
     async fn preconnect_same_route() {
         let number_of_times_called = AtomicU8::new(0);
 
-        let inner_connector = ConnectFn(|_inner, _route, _log_tag| {
+        let inner_connector = ConnectFn(|_inner, _route| {
             // This acts like a successful TLS connection to a server that immediately closes
             // the connection before sending anything.
             let (client, _server) = tokio::io::duplex(1024);
@@ -791,7 +831,7 @@ pub(crate) mod test {
                     .cloned()
                     .map(|route| route.inner)
                     .collect_vec(),
-                "preconnect".into(),
+                "preconnect",
             )
             .await
             .expect("success");
@@ -805,7 +845,7 @@ pub(crate) mod test {
                 password: "****".into(),
             },
             receive_stories: ReceiveStories(true),
-            languages: None,
+            languages: LanguageList::default(),
         };
 
         let err = ChatConnection::start_connect_with_transport(
@@ -815,9 +855,11 @@ pub(crate) mod test {
             ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
+                post_request_interface_check_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
+            EnablePermessageDeflate::No,
             Some(auth_headers.clone().into()),
             "fake chat",
         )
@@ -835,9 +877,11 @@ pub(crate) mod test {
             ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
+                post_request_interface_check_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
+            EnablePermessageDeflate::No,
             Some(auth_headers.into()),
             "fake chat",
         )

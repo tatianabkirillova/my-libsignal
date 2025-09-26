@@ -19,7 +19,7 @@ use crate::backup::sticker::MessageStickerError;
 use crate::backup::time::{
     Duration, ReportUnusualTimestamp, Timestamp, TimestampError, TimestampOrForever,
 };
-use crate::backup::{likely_empty, BackupMeta, CallError, ReferencedTypes, TryIntoWith};
+use crate::backup::{BackupMeta, CallError, ReferencedTypes, TryIntoWith, likely_empty};
 use crate::proto::backup as proto;
 
 mod contact_message;
@@ -409,10 +409,11 @@ pub enum Direction<Recipient> {
         read: bool,
         sealed_sender: bool,
     },
-    Outgoing(
+    Outgoing {
         #[serde(bound(serialize = "Recipient: serde::Serialize + SerializeOrder"))]
-        UnorderedList<OutgoingSend<Recipient>>,
-    ),
+        recipients: UnorderedList<OutgoingSend<Recipient>>,
+        received: Timestamp,
+    },
     Directionless,
 }
 
@@ -459,12 +460,12 @@ pub enum OutgoingSendError {
 }
 
 impl<
-        M: Method + ReferencedTypes,
-        C: LookupPair<RecipientId, MinimalRecipientData, M::RecipientReference>
-            + Lookup<PinOrder, M::RecipientReference>
-            + Lookup<CustomColorId, M::CustomColorReference>
-            + ReportUnusualTimestamp,
-    > TryIntoWith<ChatData<M>, C> for proto::Chat
+    M: Method + ReferencedTypes,
+    C: LookupPair<RecipientId, MinimalRecipientData, M::RecipientReference>
+        + Lookup<PinOrder, M::RecipientReference>
+        + Lookup<CustomColorId, M::CustomColorReference>
+        + ReportUnusualTimestamp,
+> TryIntoWith<ChatData<M>, C> for proto::Chat
 {
     type Error = ChatError;
 
@@ -530,11 +531,11 @@ impl<
 }
 
 impl<
-        C: LookupPair<RecipientId, MinimalRecipientData, M::RecipientReference>
-            + AsRef<BackupMeta>
-            + ReportUnusualTimestamp,
-        M: Method + ReferencedTypes,
-    > TryIntoWith<ChatItemData<M>, C> for proto::ChatItem
+    C: LookupPair<RecipientId, MinimalRecipientData, M::RecipientReference>
+        + AsRef<BackupMeta>
+        + ReportUnusualTimestamp,
+    M: Method + ReferencedTypes,
+> TryIntoWith<ChatItemData<M>, C> for proto::ChatItem
 {
     type Error = ChatItemError;
 
@@ -580,7 +581,10 @@ impl<
 
             (
                 MinimalRecipientData::Contact { .. } | MinimalRecipientData::ReleaseNotes,
-                Direction::Outgoing(_),
+                Direction::Outgoing {
+                    recipients: _,
+                    received: _,
+                },
             ) => Err(ChatItemError::OutgoingMessageFrom(
                 author_id,
                 *author_data.as_ref(),
@@ -597,7 +601,13 @@ impl<
                 author_id,
             )),
 
-            (MinimalRecipientData::Self_, Direction::Outgoing(_))
+            (
+                MinimalRecipientData::Self_,
+                Direction::Outgoing {
+                    recipients: _,
+                    received: _,
+                },
+            )
             | (MinimalRecipientData::Self_, Direction::Directionless) => {
                 Ok(ChatItemAuthorKind::Self_)
             }
@@ -704,8 +714,11 @@ impl<
                         read,
                         sealed_sender: _,
                     } => *read,
-                    Direction::Outgoing(outgoing) => {
-                        outgoing.0.iter().all(|send| match send.status {
+                    Direction::Outgoing {
+                        recipients,
+                        received: _,
+                    } => {
+                        recipients.0.iter().all(|send| match send.status {
                             DeliveryStatus::Failed(_) => false,
                             DeliveryStatus::Pending => false,
 
@@ -882,13 +895,19 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
             }
             DirectionalDetails::Outgoing(OutgoingMessageDetails {
                 sendStatus,
+                dateReceived,
                 special_fields: _,
-            }) => Ok(Direction::Outgoing(
-                sendStatus
+            }) => Ok(Direction::Outgoing {
+                recipients: sendStatus
                     .into_iter()
                     .map(|s| s.try_into_with(context))
                     .collect::<Result<_, _>>()?,
-            )),
+                received: Timestamp::from_millis(
+                    dateReceived,
+                    "OutgoingMessageDetails.dateReceived",
+                    context,
+                )?,
+            }),
             DirectionalDetails::Directionless(DirectionlessMessageDetails {
                 special_fields: _,
             }) => Ok(Direction::Directionless),
@@ -989,11 +1008,11 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
 }
 
 impl<
-        C: LookupPair<RecipientId, MinimalRecipientData, M::RecipientReference>
-            + AsRef<BackupMeta>
-            + ReportUnusualTimestamp,
-        M: Method + ReferencedTypes,
-    > TryIntoWith<ChatItemMessage<M>, C> for proto::chat_item::Item
+    C: LookupPair<RecipientId, MinimalRecipientData, M::RecipientReference>
+        + AsRef<BackupMeta>
+        + ReportUnusualTimestamp,
+    M: Method + ReferencedTypes,
+> TryIntoWith<ChatItemMessage<M>, C> for proto::chat_item::Item
 {
     type Error = ChatItemError;
 
@@ -1049,10 +1068,10 @@ mod test {
     use test_case::test_case;
 
     use super::*;
+    use crate::backup::Purpose;
     use crate::backup::method::Store;
     use crate::backup::testutil::TestContext;
     use crate::backup::time::testutil::MillisecondsSinceEpoch;
-    use crate::backup::Purpose;
 
     impl proto::ChatItem {
         pub(crate) fn test_data() -> Self {
@@ -1081,6 +1100,7 @@ mod test {
         fn test_data() -> Self {
             Self {
                 sendStatus: vec![proto::SendStatus::test_data()],
+                dateReceived: MillisecondsSinceEpoch::TEST_VALUE.0,
                 special_fields: SpecialFields::default(),
             }
         }
@@ -1533,8 +1553,14 @@ mod test {
             last_status_update: Timestamp::test_value(),
         };
 
-        let message1 = Direction::Outgoing(vec![send1.clone(), send2.clone()].into());
-        let message2 = Direction::Outgoing(vec![send2, send1].into());
+        let message1 = Direction::Outgoing {
+            recipients: vec![send1.clone(), send2.clone()].into(),
+            received: Timestamp::test_value(),
+        };
+        let message2 = Direction::Outgoing {
+            recipients: vec![send2, send1].into(),
+            received: Timestamp::test_value(),
+        };
 
         assert_eq!(
             serde_json::to_string_pretty(&message1).expect("valid"),

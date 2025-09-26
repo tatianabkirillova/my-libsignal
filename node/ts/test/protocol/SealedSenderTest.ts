@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-/* eslint-disable @typescript-eslint/require-await */
-
-import * as SignalClient from '../../index';
-import * as util from '../util';
+import * as SignalClient from '../../index.js';
+import * as util from '../util.js';
 
 import { assert, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import {
   InMemoryIdentityKeyStore,
   InMemoryKyberPreKeyStore,
@@ -17,7 +15,7 @@ import {
   InMemorySenderKeyStore,
   InMemorySessionStore,
   InMemorySignedPreKeyStore,
-} from './TestStores';
+} from './TestStores.js';
 
 use(chaiAsPromised);
 util.initLogger();
@@ -161,6 +159,22 @@ describe('SealedSender', () => {
     assert.deepEqual(bPlaintext.senderUuid(), aUuid);
     assert.deepEqual(bPlaintext.senderAci()?.getServiceIdString(), aUuid);
     assert.deepEqual(bPlaintext.deviceId(), aDeviceId);
+
+    const randomPublicKey = () =>
+      SignalClient.PrivateKey.generate().getPublicKey();
+    assert.isTrue(
+      senderCert.validateWithTrustRoots(
+        [randomPublicKey(), trustRoot.getPublicKey(), randomPublicKey()],
+        31335
+      )
+    );
+
+    assert.isFalse(
+      senderCert.validateWithTrustRoots(
+        [randomPublicKey(), randomPublicKey()],
+        31335
+      )
+    );
 
     const innerMessage = await SignalClient.signalEncrypt(
       aPlaintext,

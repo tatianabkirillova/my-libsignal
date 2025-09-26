@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-/* eslint-disable @typescript-eslint/require-await */
-
-import * as SignalClient from '../index';
-import * as util from './util';
+import * as SignalClient from '../index.js';
+import * as util from './util.js';
 
 import { assert, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 
 use(chaiAsPromised);
 util.initLogger();
@@ -156,6 +154,22 @@ describe('SignalClient', () => {
     assert(
       secondary.publicKey.verifyAlternateIdentity(primary.publicKey, signature)
     );
+  });
+
+  it('can do HPKE', () => {
+    const keyPair = SignalClient.IdentityKeyPair.generate();
+    const message = Uint8Array.of(11, 22, 33, 44);
+    const sealed = keyPair.publicKey.seal(
+      message,
+      'test',
+      Uint8Array.of(1, 2, 3)
+    );
+    const opened = keyPair.privateKey.open(
+      sealed,
+      'test',
+      Uint8Array.of(1, 2, 3)
+    );
+    assert.deepEqual(opened, message);
   });
 
   it('includes all error codes in LibSignalError', () => {

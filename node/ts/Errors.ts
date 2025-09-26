@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { ProtocolAddress } from './Address';
-import * as Native from '../Native';
+import { ProtocolAddress } from './Address.js';
+import Native from '../Native.js';
 
 export enum ErrorCode {
   Generic,
@@ -48,6 +48,8 @@ export enum ErrorCode {
   SvrDataMissing,
   SvrRequestFailed,
   SvrRestoreFailed,
+  SvrAttestationError,
+  SvrInvalidData,
 
   ChatServiceInactive,
   AppExpired,
@@ -61,6 +63,8 @@ export enum ErrorCode {
 
   KeyTransparencyError,
   KeyTransparencyVerificationFailed,
+
+  IncrementalMacVerificationFailed,
 }
 
 export class LibSignalErrorBase extends Error {
@@ -292,6 +296,14 @@ export type SvrRestoreFailedError = LibSignalErrorCommon & {
   readonly triesRemaining: number;
 };
 
+export type SvrAttestationError = LibSignalErrorCommon & {
+  code: ErrorCode.SvrAttestationError;
+};
+
+export type SvrInvalidDataError = LibSignalErrorCommon & {
+  code: ErrorCode.SvrInvalidData;
+};
+
 export type BackupValidationError = LibSignalErrorCommon & {
   code: ErrorCode.BackupValidation;
   readonly unknownFields: ReadonlyArray<string>;
@@ -307,6 +319,10 @@ export type KeyTransparencyError = LibSignalErrorCommon & {
 
 export type KeyTransparencyVerificationFailed = LibSignalErrorCommon & {
   code: ErrorCode.KeyTransparencyVerificationFailed;
+};
+
+export type IncrementalMacVerificationFailed = LibSignalErrorCommon & {
+  code: ErrorCode.IncrementalMacVerificationFailed;
 };
 
 export type LibSignalError =
@@ -341,6 +357,8 @@ export type LibSignalError =
   | SvrDataMissingError
   | SvrRestoreFailedError
   | SvrRequestFailedError
+  | SvrAttestationError
+  | SvrInvalidDataError
   | UnsupportedMediaInputError
   | ChatServiceInactive
   | AppExpiredError
@@ -352,4 +370,5 @@ export type LibSignalError =
   | BackupValidationError
   | CancellationError
   | KeyTransparencyError
-  | KeyTransparencyVerificationFailed;
+  | KeyTransparencyVerificationFailed
+  | IncrementalMacVerificationFailed;

@@ -4,13 +4,13 @@
 //
 
 import { assert, config, expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
-import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
-import * as util from './util';
-import { Aci, Pni } from '../Address';
-import * as Native from '../../Native';
-import { ErrorCode, LibSignalErrorBase } from '../Errors';
+import chaiAsPromised from 'chai-as-promised';
+import sinon from 'sinon';
+import sinonChai from 'sinon-chai';
+import * as util from './util.js';
+import { Aci, Pni } from '../Address.js';
+import Native, { type ChatResponse } from '../../Native.js';
+import { ErrorCode, LibSignalErrorBase } from '../Errors.js';
 import {
   AuthenticatedChatConnection,
   buildHttpRequest,
@@ -22,14 +22,12 @@ import {
   SIGNAL_TLS_PROXY_SCHEME,
   TokioAsyncContext,
   UnauthenticatedChatConnection,
-} from '../net';
-import {
-  ChatResponse,
-  TESTING_ConnectionManager_isUsingProxy,
-} from '../../Native';
-import { CompletablePromise } from './util';
-import { fail } from 'assert';
-import { newNativeHandle } from '../internal';
+} from '../net.js';
+import { CompletablePromise } from './util.js';
+import { fail } from 'node:assert';
+import { newNativeHandle } from '../internal.js';
+
+const { TESTING_ConnectionManager_isUsingProxy } = Native;
 
 use(chaiAsPromised);
 use(sinonChai);
@@ -371,9 +369,8 @@ describe('chat service api', () => {
         this.skip();
       }
 
-      // The default TLS proxy config doesn't support staging, so we connect to production.
       const net = new Net({
-        env: Environment.Production,
+        env: Environment.Staging,
         userAgent: userAgent,
       });
       const [host = PROXY_SERVER, port = '443'] = PROXY_SERVER.split(':', 2);
@@ -390,9 +387,8 @@ describe('chat service api', () => {
         this.skip();
       }
 
-      // The default TLS proxy config doesn't support staging, so we connect to production.
       const net = new Net({
-        env: Environment.Production,
+        env: Environment.Staging,
         userAgent: userAgent,
       });
       const [host = PROXY_SERVER, port = '443'] = PROXY_SERVER.split(':', 2);
@@ -417,9 +413,8 @@ describe('chat service api', () => {
         this.skip();
       }
 
-      // The default TLS proxy config doesn't support staging, so we connect to production.
       const net = new Net({
-        env: Environment.Production,
+        env: Environment.Staging,
         userAgent: userAgent,
       });
 
@@ -806,11 +801,6 @@ describe('cdsi lookup', () => {
           ErrorCode.Generic,
           'attestation data invalid: fake reason',
         ],
-        [
-          'InvalidResponse',
-          ErrorCode.IoError,
-          'invalid response received from the server',
-        ],
         ['RetryAfter42Seconds', ErrorCode.RateLimitedError, 'retry after 42s'],
         [
           'InvalidToken',
@@ -823,21 +813,20 @@ describe('cdsi lookup', () => {
           'request was invalid: fake reason',
         ],
         [
-          'Parse',
+          'TcpConnectFailed',
           ErrorCode.IoError,
-          'failed to parse the response from the server',
-        ],
-        [
-          'ConnectDnsFailed',
-          ErrorCode.IoError,
-          'transport failed: DNS lookup failed',
+          'transport failed: Failed to establish TCP connection to any of the IPs',
         ],
         [
           'WebSocketIdleTooLong',
           ErrorCode.IoError,
           'websocket error: channel was idle for too long',
         ],
-        ['ConnectionTimedOut', ErrorCode.IoError, 'connect attempt timed out'],
+        [
+          'AllConnectionAttemptsFailed',
+          ErrorCode.IoError,
+          'no connection attempts succeeded before timeout',
+        ],
         ['ServerCrashed', ErrorCode.IoError, 'server error: crashed'],
       ];
       cases.forEach((testCase) => {

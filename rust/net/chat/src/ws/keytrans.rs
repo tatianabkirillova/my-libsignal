@@ -7,7 +7,7 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use base64::prelude::{
-    Engine as _, BASE64_STANDARD, BASE64_STANDARD_NO_PAD, BASE64_URL_SAFE_NO_PAD,
+    BASE64_STANDARD, BASE64_STANDARD_NO_PAD, BASE64_URL_SAFE_NO_PAD, Engine as _,
 };
 use http::header::ACCEPT;
 use http::uri::PathAndQuery;
@@ -17,7 +17,7 @@ use libsignal_net::chat;
 use libsignal_protocol::PublicKey;
 use serde::{Deserialize, Serialize};
 
-use super::{TryIntoResponse as _, WsConnection, CONTENT_TYPE_JSON};
+use super::{CONTENT_TYPE_JSON, TryIntoResponse as _, WsConnection};
 use crate::api::keytrans::*;
 use crate::api::{RequestError, Unauth};
 
@@ -334,8 +334,8 @@ mod test_support {
     use libsignal_keytrans::{ChatSearchResponse, StoredAccountData};
     use libsignal_net::chat::ChatConnection;
     use libsignal_net::env;
-    use libsignal_net::infra::route::DirectOrProxyRoute;
     use libsignal_net::infra::EnableDomainFronting;
+    use libsignal_net::infra::route::DirectOrProxyMode;
     use prost::Message as _;
 
     use super::*;
@@ -346,8 +346,8 @@ mod test_support {
         let chat = simple_chat_connection(
             &env::STAGING,
             EnableDomainFronting::OneDomainPerProxy,
-            None,
-            |route| matches!(route.inner.inner, DirectOrProxyRoute::Direct(_)),
+            DirectOrProxyMode::DirectOnly,
+            |_| true,
         )
         .await
         .expect("can connect to chat");
@@ -489,8 +489,8 @@ mod test {
     use test_case::test_case;
 
     use super::test_support::{
-        make_chat, make_kt, retry_n, should_retry, test_account, test_account_data,
-        test_distinguished_tree, NETWORK_RETRY_COUNT,
+        NETWORK_RETRY_COUNT, make_chat, make_kt, retry_n, should_retry, test_account,
+        test_account_data, test_distinguished_tree,
     };
     use super::*;
 

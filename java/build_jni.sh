@@ -181,6 +181,7 @@ export CARGO_PROFILE_RELEASE_OPT_LEVEL=s # optimize for size over speed
 
 # Use full LTO and small BoringSSL curve tables to reduce binary size.
 export CFLAGS="-DOPENSSL_SMALL -flto=full ${CFLAGS:-}"
+export CXXFLAGS="-DOPENSSL_SMALL -flto=full ${CXXFLAGS:-}"
 export CARGO_PROFILE_RELEASE_LTO=fat
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 
@@ -225,6 +226,6 @@ target_for_abi() {
 
 for abi in "${android_abis[@]}"; do
     rust_target=$(target_for_abi "$abi")
-    echo_then_run cargo build -p libsignal-jni -p libsignal-jni-testing ${RUST_RELEASE:+--release} ${FEATURES:+--features "${FEATURES[*]}"} -Z unstable-options --target "$rust_target" --artifact-dir "${ANDROID_LIB_DIR}/$abi"
+    echo_then_run cargo build -p libsignal-jni -p libsignal-jni-testing ${RUST_RELEASE:+--release} ${FEATURES:+--features "${FEATURES[*]}"} -Z unstable-options --target "$rust_target" --artifact-dir "${ANDROID_LIB_DIR}/$abi" --timings
     check_for_debug_level_logs_if_needed "${ANDROID_LIB_DIR}/$abi"
 done

@@ -16,12 +16,12 @@ use serde_with::serde_as;
 use uuid::Uuid;
 use zkgroup::ProfileKeyBytes;
 
+use crate::backup::TryIntoWith;
 use crate::backup::call::{CallLink, CallLinkError, CallLinkRootKey};
 use crate::backup::frame::RecipientId;
 use crate::backup::method::LookupPair;
 use crate::backup::serialize::{self, SerializeOrder, UnorderedList};
 use crate::backup::time::{ReportUnusualTimestamp, Timestamp, TimestampError};
-use crate::backup::TryIntoWith;
 use crate::proto::backup as proto;
 use crate::proto::backup::recipient::Destination as RecipientDestination;
 
@@ -230,7 +230,7 @@ pub struct FullRecipientData(Arc<(MinimalRecipientData, Destination<FullRecipien
 
 impl serde::Serialize for FullRecipientData {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0 .1.serialize(serializer)
+        self.0.1.serialize(serializer)
     }
 }
 
@@ -376,7 +376,7 @@ impl AsRef<DestinationKind> for MinimalRecipientData {
 impl std::ops::Deref for FullRecipientData {
     type Target = Destination<FullRecipientData>;
     fn deref(&self) -> &Self::Target {
-        &self.0 .1
+        &self.0.1
     }
 }
 
@@ -416,7 +416,7 @@ impl FullRecipientData {
 
 impl AsRef<MinimalRecipientData> for FullRecipientData {
     fn as_ref(&self) -> &MinimalRecipientData {
-        &self.0 .0
+        &self.0.0
     }
 }
 
@@ -731,7 +731,7 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
                         distribution_id == MY_STORY_UUID,
                     ) {
                         (proto::distribution_list::PrivacyMode::UNKNOWN, _) => {
-                            return Err(RecipientError::DistributionListPrivacyUnknown)
+                            return Err(RecipientError::DistributionListPrivacyUnknown);
                         }
                         (proto::distribution_list::PrivacyMode::ONLY_WITH, _) => {
                             PrivacyMode::OnlyWith(members)
@@ -771,8 +771,8 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
 
 #[cfg(test)]
 mod test {
-    use array_concat::concat_arrays;
     use assert_matches::assert_matches;
+    use const_str::concat_bytes;
     use nonzero_ext::nonzero;
     use protobuf::EnumOrUnknown;
     use test_case::test_case;
@@ -811,7 +811,7 @@ mod test {
         pub(crate) const TEST_PROFILE_KEY: ProfileKeyBytes = [0x36; 32];
         pub(crate) const TEST_E164: E164 = E164(nonzero!(16505550101u64));
         pub(crate) const TEST_IDENTITY_KEY_BYTES: [u8; 33] =
-            concat_arrays!([0x05 /*type byte*/], [0x01; 32]);
+            *concat_bytes!([0x05 /*type byte*/], [0x01; 32]);
 
         fn test_data() -> Self {
             Self {

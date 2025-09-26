@@ -21,6 +21,9 @@ These should usually be prioritized in that order, but adjust the trade-off as n
 
 - **Every change should have tests** or be covered by existing tests. There are sometimes exceptions to this, but a lot of times the act of justifying the exception can suggest how to write the tests instead.
 
+
+## Logging
+
 - **Logs should not contain user data**, including the default stringification for errors (Rust's Display, Java and TypeScript's `toString()`, Swift's `description`). "Debug" and "verbose" log levels are an exception to this, since they are turned off at compile time in our client library release builds. Note that this isn't "any information that can uniquely distinguish one user from another" (an ephemeral public key can do that, and there are legitimate reasons to log those; use your best judgment), but it is "any information that includes user input" (such as unencrypted usernames), "any information that can be linked back to a Signal account" (such as identity keys), and of course "any passwords or private keys".
 
     One place where this is particularly subtle is when working with types that come from dependencies, especially errors. If the dependency has access to any such potentially-sensitive information, it's best to assume it could make it into arbitrary output, including error messages. The libsignal-net crate is particularly sensitive to this and constrains its errors with a custom LogSafeDisplay trait, but this isn't perfect.
@@ -30,6 +33,8 @@ These should usually be prioritized in that order, but adjust the trade-off as n
 - **Logs should be kept minimal on success paths**. It's harder to find significant information in a sea of "operation succeeded!", and in the worst case we'd hit the log size limit sooner. (Clients only keep a few days of logs, and they'll keep even less if the recent logs are taking up too much space.) Even on failure paths, consider how much will end up in client logs, and if it'll be redundant with a higher-level log. Especially when logging in a loop. But don't go too far: it's important to know when certain events happen in relation to earlier or later failures.
 
     As with the previous rule, this does not apply to the "debug" and "verbose" log levels, which are turned off at compile time in our client library release builds.
+
+- **Only use "error"-level logs for bugs**. The apps and our log-processing tools may highlight "error"-level logs specially (e.g. asking the user to submit a debug log), so something bad that can happen for benign reasons like "a network connection dropped" should only be a "warning", not an "error". This doesn't have to be perfect, e.g. an incoming message might not be decryptable because the local user has restored their desktop OS from a snapshot. Instead, take it as "in the absence of other information, would we investigate this event alone as a possible bug?"
 
 
 # Rust
@@ -44,7 +49,9 @@ These should usually be prioritized in that order, but adjust the trade-off as n
 
 - You don't have to write doc comments on everything, but **if you do write a comment, make it a doc comment**, because they show up more nicely in IDEs.
 
-- We build with a pinned nightly toolchain, but **we also support stable**. The specific minimum supported version of stable is checked in CI (specifically, at the top of [build_and_test.yml](.github/workflows/build_and_test.yml)). We permit ourselves to bump this as needed, but try not to do so capriciously because we know external people might be in non-rustup scenarios where getting a new stable is tricky. If you need to bump the minimum supported version of stable, make sure the next release has a "breaking" version number.
+- We build with a pinned nightly toolchain, but **we also support stable**. The specific minimum supported version of stable is listed in our top-level Cargo.toml and checked in CI. We permit ourselves to bump this as needed, but try not to do so capriciously because we know external people might be in non-rustup scenarios where getting a new stable is tricky; in practice we often end up following tokio's "six months back" policy. If you need to bump the minimum supported version of stable, make sure the next release has a "breaking" version number.
+
+    - Crate-level Cargo.tomls don't usually inherit the workspace `rust-version`, because many crates are relatively stable and may continue working for external folks using earlier versions of Rust even though we no longer test for them; picking up the top-level MSRV update would therefore be unnecessarily breaking. Instead, they have a `rust-version` that indicates a known minimum at some point in the past; it may be too low, but it will never be overly high. The exceptions are the `bridge` crates, which are not intended to be used for anything but the app language libraries.
 
 - **We do not have a changelog file**; we rely on [GitHub displaying all our releases](https://github.com/signalapp/libsignal/releases).
 

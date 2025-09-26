@@ -11,9 +11,9 @@ use crate::consts::{MAX_FORWARD_JUMPS, MAX_UNACKNOWLEDGED_SESSION_AGE};
 use crate::ratchet::{ChainKey, MessageKeyGenerator, UsePQRatchet};
 use crate::state::{InvalidSessionError, SessionState};
 use crate::{
-    session, CiphertextMessage, CiphertextMessageType, Direction, IdentityKeyStore, KeyPair,
-    KyberPayload, KyberPreKeyStore, PreKeySignalMessage, PreKeyStore, ProtocolAddress, PublicKey,
-    Result, SessionRecord, SessionStore, SignalMessage, SignalProtocolError, SignedPreKeyStore,
+    CiphertextMessage, CiphertextMessageType, Direction, IdentityKeyStore, KeyPair, KyberPayload,
+    KyberPreKeyStore, PreKeySignalMessage, PreKeyStore, ProtocolAddress, PublicKey, Result,
+    SessionRecord, SessionStore, SignalMessage, SignalProtocolError, SignedPreKeyStore, session,
 };
 
 pub async fn message_encrypt<R: Rng + CryptoRng>(
@@ -258,19 +258,25 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
         )
         .await?;
 
+    if let Some(pre_key_used) = pre_key_used {
+        if let Some(kyber_pre_key_id) = pre_key_used.kyber_pre_key_id {
+            kyber_pre_key_store
+                .mark_kyber_pre_key_used(
+                    kyber_pre_key_id,
+                    pre_key_used.signed_ec_pre_key_id,
+                    ciphertext.base_key(),
+                )
+                .await?;
+        }
+
+        if let Some(pre_key_id) = pre_key_used.one_time_ec_pre_key_id {
+            pre_key_store.remove_pre_key(pre_key_id).await?;
+        }
+    }
+
     session_store
         .store_session(remote_address, &session_record)
         .await?;
-
-    if let Some(pre_key_id) = pre_key_used.pre_key_id {
-        pre_key_store.remove_pre_key(pre_key_id).await?;
-    }
-
-    if let Some(kyber_pre_key_id) = pre_key_used.kyber_pre_key_id {
-        kyber_pre_key_store
-            .mark_kyber_pre_key_used(kyber_pre_key_id)
-            .await?;
-    }
 
     Ok(ptext)
 }
@@ -556,8 +562,9 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
             log::error!(
                 "No valid session for recipient: {}, current session base key {}, number of previous states: {}",
                 remote_address,
-                current_state.sender_ratchet_key_for_logging()
-                .unwrap_or_else(|e| format!("<error: {e}>")),
+                current_state
+                    .sender_ratchet_key_for_logging()
+                    .unwrap_or_else(|e| format!("<error: {e}>")),
                 previous_state_count(),
             );
         } else {

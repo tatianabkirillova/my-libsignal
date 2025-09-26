@@ -4,7 +4,7 @@
 //
 
 use std::cell::RefCell;
-use std::collections::{hash_map, HashMap};
+use std::collections::{HashMap, hash_map};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -78,7 +78,7 @@ pub trait ReferencedTypes {
     ) -> &'a Self::RecipientReference;
 
     fn is_same_reference(left: &Self::RecipientReference, right: &Self::RecipientReference)
-        -> bool;
+    -> bool;
 }
 
 pub struct PartialBackup<M: Method + ReferencedTypes> {
@@ -585,6 +585,7 @@ impl<M: Method + ReferencedTypes> PartialBackup<M> {
             mediaRootBackupKey,
             currentAppVersion,
             firstAppVersion,
+            debugInfo: _,
             special_fields: _,
         } = value;
 
@@ -874,16 +875,6 @@ pub enum ConvertJsonError {
     ProtoEncode(#[from] protobuf::Error),
     /// input/output error: {0}
     Io(#[from] std::io::Error),
-}
-
-#[cfg(feature = "json")]
-impl From<crate::parse::ParseError> for ConvertJsonError {
-    fn from(value: crate::parse::ParseError) -> Self {
-        match value {
-            crate::parse::ParseError::Decode(e) => e.into(),
-            crate::parse::ParseError::Io(e) => e.into(),
-        }
-    }
 }
 
 #[cfg(feature = "json")]

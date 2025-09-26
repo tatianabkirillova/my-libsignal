@@ -5,7 +5,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'LibSignalClient'
-  s.version          = '0.76.3'
+  s.version          = '0.82.0'
   s.summary          = 'A Swift wrapper library for communicating with the Signal messaging service.'
 
   s.homepage         = 'https://github.com/signalapp/libsignal'
@@ -15,6 +15,7 @@ Pod::Spec.new do |s|
 
   s.swift_version    = '5'
   s.platform         = :ios, '15.0'
+  s.libraries        = ['z']
 
   s.source_files = ['swift/Sources/**/*.swift', 'swift/Sources/**/*.m']
   s.preserve_paths = [
@@ -42,6 +43,7 @@ Pod::Spec.new do |s|
 
       'CARGO_BUILD_TARGET[sdk=iphonesimulator*][arch=arm64]' => 'aarch64-apple-ios-sim',
       'CARGO_BUILD_TARGET[sdk=iphonesimulator*][arch=*]' => 'x86_64-apple-ios',
+      'CARGO_BUILD_TARGET[sdk=iphoneos*][arch=arm64e]' => 'arm64e-apple-ios',
       'CARGO_BUILD_TARGET[sdk=iphoneos*]' => 'aarch64-apple-ios',
       # Presently, there's no special SDK or arch for maccatalyst,
       # so we need to hackily use the "IS_MACCATALYST" build flag

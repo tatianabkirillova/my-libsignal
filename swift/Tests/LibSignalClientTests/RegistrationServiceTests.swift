@@ -15,11 +15,11 @@ import Testing
 class RegistrationServiceConversionTests {
     private struct ErrorTest {
         public let operationName: String
-        public let convertFn: (_: UnsafePointer<CChar>) -> OpaquePointer?
+        public let convertFn: (UnsafePointer<CChar>) -> OpaquePointer?
         public let cases: [(String, (Error) -> Bool)]
         public init(
             _ operationName: String,
-            _ convertFn: @escaping (_: UnsafePointer<CChar>) -> OpaquePointer?,
+            _ convertFn: @escaping (UnsafePointer<CChar>) -> OpaquePointer?,
             _ cases: [(String, (Error) -> Bool)]
         ) {
             self.operationName = operationName
@@ -67,7 +67,7 @@ class RegistrationServiceConversionTests {
     // They'd get shorter if Swift added a `matches!` equivalent.
     @Test
     func errorConversion() {
-        let retryLaterCase = ("RetryAfter42Seconds", { (e: Error) in if case SignalError.rateLimitedError(retryAfter: 42, message: "retry after 42s") = e { true } else { false }})
+        let retryLaterCase = ("RetryAfter42Seconds", { (e: Error) in if case SignalError.rateLimitedError(retryAfter: 42, message: "Rate limited; try again after 42s") = e { true } else { false }})
         let unknownCase = ("Unknown", { (e: Error) in if case RegistrationError.unknown("some message") = e { true } else { false }})
         let timeoutCase = ("Timeout", { (e: Error) in if case SignalError.requestTimeoutError("the request timed out") = e { true } else { false }})
         let requestNotValidCase = ("RequestWasNotValid", { (e: Error) in if case RegistrationError.unknown("the request did not pass server validation") = e { true } else { false }})
@@ -169,7 +169,7 @@ class RegistrationServiceConversionTests {
                     }
                     Issue.record("exception expected")
                 } catch let e {
-                    #expect(checkErrorExpected(e), Comment(rawValue: String(describing: e)))
+                    #expect(checkErrorExpected(e))
                 }
             }
         }

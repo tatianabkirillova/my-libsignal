@@ -5,7 +5,7 @@ use libsignal_net::auth::Auth;
 use libsignal_net::chat::{LanguageList, Request as ChatRequest};
 use libsignal_net::infra::AsHttpHeader as _;
 use libsignal_protocol::PublicKey;
-use serde_with::{serde_as, skip_serializing_none, FromInto};
+use serde_with::{FromInto, serde_as, skip_serializing_none};
 
 use crate::api::registration::{
     AccountKeys, CreateSession, ForServiceIds, InvalidSessionId, NewMessageNotification,
@@ -34,7 +34,7 @@ pub(super) struct RequestVerificationCode<'a> {
     pub(super) transport: VerificationTransport,
     pub(super) client: &'a str,
     #[serde(skip)]
-    pub(crate) language_list: Option<LanguageList>,
+    pub(crate) language_list: LanguageList,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -197,10 +197,7 @@ impl Request for RequestVerificationCode<'_> {
     where
         Self: 's,
     {
-        self.language_list
-            .as_ref()
-            .map(|l| l.as_header())
-            .into_iter()
+        self.language_list.clone().into_header().into_iter()
     }
 
     fn to_json_body(&self) -> Option<Box<[u8]>> {
@@ -427,11 +424,11 @@ mod test {
     use uuid::uuid;
 
     use super::*;
+    use crate::api::ChallengeOption;
     use crate::api::registration::{
         CheckSvr2CredentialsResponse, PushToken, RegisterAccountResponse, RegisterResponseBackup,
         RegisterResponseBadge, RegisterResponseEntitlements, Svr2CredentialsResult,
     };
-    use crate::api::ChallengeOption;
     use crate::ws::TryIntoResponse as _;
 
     #[test]
@@ -532,7 +529,7 @@ mod test {
             request: RequestVerificationCode {
                 transport: VerificationTransport::Sms,
                 client: "client name",
-                language_list: Some(LanguageList(HeaderValue::from_static("tlh"))),
+                language_list: LanguageList::parse(&["tlh", "qya"]).expect("valid"),
             },
         }
         .into();
@@ -544,7 +541,10 @@ mod test {
                 path: PathAndQuery::from_static("/v1/verification/session/aaabbbcccdddeee/code"),
                 headers: HeaderMap::from_iter([
                     CONTENT_TYPE_JSON,
-                    ("accept-language".parse().unwrap(), "tlh".parse().unwrap())
+                    (
+                        "accept-language".parse().unwrap(),
+                        "tlh,qya".parse().unwrap()
+                    )
                 ]),
                 body: Some(
                     b"{\"transport\":\"sms\",\"client\":\"client name\"}"

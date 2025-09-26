@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import * as Native from '../../Native';
-import { LibSignalError } from '../Errors';
-import { ServerMessageAck, Wrapper } from '../../Native';
-import { TokioAsyncContext, Environment } from '../net';
-import * as KT from './KeyTransparency';
-import { newNativeHandle } from '../internal';
+import Native, { ServerMessageAck, Wrapper } from '../../Native.js';
+import { LibSignalError } from '../Errors.js';
+import { TokioAsyncContext, Environment } from '../net.js';
+import * as KT from './KeyTransparency.js';
+import { newNativeHandle } from '../internal.js';
 
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MILLIS = 5000;
 
@@ -19,6 +18,10 @@ export type ChatRequest = Readonly<{
   body?: Uint8Array;
   timeoutMillis?: number;
 }>;
+
+export type RequestOptions = {
+  abortSignal?: AbortSignal;
+};
 
 type ConnectionManager = Native.Wrapper<Native.ConnectionManager>;
 
@@ -38,7 +41,7 @@ export interface ConnectionEventsListener {
    * closures. If the closure was not due to a deliberate disconnect, the error
    * will be provided.
    */
-  onConnectionInterrupted(cause: LibSignalError | null): void;
+  onConnectionInterrupted: (cause: LibSignalError | null) => void;
 }
 
 export interface ChatServiceListener extends ConnectionEventsListener {
@@ -50,11 +53,11 @@ export interface ChatServiceListener extends ConnectionEventsListener {
    * If `ack`'s `send` method is not called, the server will leave this message in the message
    * queue and attempt to deliver it again in the future.
    */
-  onIncomingMessage(
+  onIncomingMessage: (
     envelope: Uint8Array,
     timestamp: number,
     ack: ChatServerMessageAck
-  ): void;
+  ) => void;
 
   /**
    * Called when the server indicates that there are no further messages in the message queue.
@@ -62,14 +65,14 @@ export interface ChatServiceListener extends ConnectionEventsListener {
    * Note that further messages may still be delivered; this merely indicates that all messages that
    * were in the queue *when the connection was established* have been delivered.
    */
-  onQueueEmpty(): void;
+  onQueueEmpty: () => void;
 
   /**
    * Called when the server has alerts for the current device.
    *
    * In practice this happens as part of the connecting process.
    */
-  onReceivedAlerts?(alerts: string[]): void;
+  onReceivedAlerts?: (alerts: string[]) => void;
 }
 
 /**
@@ -83,20 +86,20 @@ export type ChatConnection = {
    * Initiates termination of the underlying connection to the Chat Service. After the service is
    * disconnected, it cannot be used again.
    */
-  disconnect(): Promise<void>;
+  disconnect: () => Promise<void>;
 
   /**
    * Sends request to the Chat service.
    */
-  fetch(
+  fetch: (
     chatRequest: ChatRequest,
-    options?: { abortSignal?: AbortSignal }
-  ): Promise<Native.ChatResponse>;
+    options?: RequestOptions
+  ) => Promise<Native.ChatResponse>;
 
   /**
    * Information about the connection to the Chat service.
    */
-  connectionInfo(): ConnectionInfo;
+  connectionInfo: () => ConnectionInfo;
 };
 
 export interface ConnectionInfo {
@@ -197,8 +200,9 @@ export class UnauthenticatedChatConnection implements ChatConnection {
   }
 
   private constructor(
-    private readonly asyncContext: TokioAsyncContext,
-    private readonly chatService: Wrapper<Native.UnauthenticatedChatConnection>,
+    // Not true-private so that they can be accessed by the "Service" interfaces in chat/.
+    readonly _asyncContext: TokioAsyncContext,
+    readonly _chatService: Wrapper<Native.UnauthenticatedChatConnection>,
     // Unused except to keep the listener alive since the Rust code only holds a
     // weak reference to the same object.
     private readonly chatListener: Native.ChatListener,
@@ -207,13 +211,13 @@ export class UnauthenticatedChatConnection implements ChatConnection {
 
   fetch(
     chatRequest: ChatRequest,
-    options?: { abortSignal?: AbortSignal }
+    options?: RequestOptions
   ): Promise<Native.ChatResponse> {
-    return this.asyncContext.makeCancellable(
+    return this._asyncContext.makeCancellable(
       options?.abortSignal,
       Native.UnauthenticatedChatConnection_send(
-        this.asyncContext,
-        this.chatService,
+        this._asyncContext,
+        this._chatService,
         buildHttpRequest(chatRequest),
         chatRequest.timeoutMillis ?? DEFAULT_CHAT_REQUEST_TIMEOUT_MILLIS
       )
@@ -222,14 +226,14 @@ export class UnauthenticatedChatConnection implements ChatConnection {
 
   disconnect(): Promise<void> {
     return Native.UnauthenticatedChatConnection_disconnect(
-      this.asyncContext,
-      this.chatService
+      this._asyncContext,
+      this._chatService
     );
   }
 
   connectionInfo(): ConnectionInfo {
     return new ConnectionInfoImpl(
-      Native.UnauthenticatedChatConnection_info(this.chatService)
+      Native.UnauthenticatedChatConnection_info(this._chatService)
     );
   }
 
@@ -237,7 +241,7 @@ export class UnauthenticatedChatConnection implements ChatConnection {
     if (this.env == null) {
       throw new Error('KeyTransparency is not supported on local test server');
     }
-    return new KT.ClientImpl(this.asyncContext, this.chatService, this.env);
+    return new KT.ClientImpl(this._asyncContext, this._chatService, this.env);
   }
 }
 
@@ -434,8 +438,8 @@ function makeNativeChatListener(
         );
       }
     },
-    _connection_interrupted(cause: LibSignalError | null): void {
-      listener.onConnectionInterrupted(cause);
+    _connection_interrupted(cause: Error | null): void {
+      listener.onConnectionInterrupted(cause as LibSignalError);
     },
   };
 }

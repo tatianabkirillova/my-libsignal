@@ -8,8 +8,8 @@ name = "zkgroup"
 version = "0.9.0"
 authors.workspace = true
 license.workspace = true
-rust-version = "1.81"
-edition = "2021"
+rust-version = "1.85"
+edition = "2024"
 description = "A zero-knowledge group library"
 
 [lints]
@@ -18,13 +18,14 @@ workspace = true
 [dependencies]
 libsignal-account-keys = { workspace = true, features = ["serde"] }
 libsignal-core = { workspace = true }
+log = { workspace = true }
 poksho = { workspace = true }
-signal-crypto = { workspace = true }
 zkcredential = { workspace = true, features = ["rayon"] }
 
 # Use our fork of curve25519-dalek for zkgroup support.
 curve25519-dalek-signal = { workspace = true, features = ["serde"] }
 
+aes = { workspace = true }
 aes-gcm-siv = { workspace = true }
 bincode = { workspace = true }
 const-str = { workspace = true }
@@ -38,6 +39,7 @@ rand = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
+static_assertions = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }

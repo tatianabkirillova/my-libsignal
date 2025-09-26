@@ -27,6 +27,9 @@ pub use describe::*;
 mod http;
 pub use http::*;
 
+mod noise;
+pub use noise::*;
+
 pub mod provider;
 pub use crate::route::provider::RouteProviderExt;
 
@@ -246,7 +249,7 @@ pub async fn connect<R, UR, C, Inner, FatalError>(
     resolver: &impl Resolver,
     connector: C,
     inner: Inner,
-    log_tag: Arc<str>,
+    log_tag: &str,
     on_error: impl FnMut(C::Error) -> ControlFlow<FatalError>,
 ) -> (
     Result<C::Connection, ConnectError<FatalError>>,
@@ -280,7 +283,7 @@ pub async fn connect_resolved<R, C, Inner, FatalError>(
     delay_policy: impl RouteDelayPolicy<R>,
     connector: C,
     inner: Inner,
-    log_tag: Arc<str>,
+    log_tag: &str,
     on_error: impl FnMut(C::Error) -> ControlFlow<FatalError>,
 ) -> (
     Result<C::Connection, ConnectError<FatalError>>,
@@ -307,7 +310,7 @@ async fn connect_inner<R, C, Inner, FatalError>(
     delay_policy: impl RouteDelayPolicy<R>,
     connector: C,
     inner: Inner,
-    log_tag: Arc<str>,
+    log_tag: &str,
     mut on_error: impl FnMut(C::Error) -> ControlFlow<FatalError>,
 ) -> (
     Result<C::Connection, ConnectError<FatalError>>,
@@ -392,12 +395,14 @@ where
             }
 
             Event::NextRouteAvailable(Some(route)) => {
-                let log_tag_for_connect = format!("{log_tag} {connects_started}").into();
+                let log_tag_for_connect = format!("{log_tag} {connects_started}");
+                let connector = &connector;
+                let inner = inner.clone();
                 connects_started += 1;
-                connects_in_progress.push(async {
+                connects_in_progress.push(async move {
                     let started = Instant::now();
                     let result = connector
-                        .connect_over(inner.clone(), route.clone(), log_tag_for_connect)
+                        .connect_over(inner, route.clone(), &log_tag_for_connect)
                         .await;
                     (route, result, started)
                 });
@@ -423,7 +428,7 @@ where
                     }
                     Err(ControlFlow::Continue(())) => {
                         // Record the non-fatal error outcome and move on.
-                        outcomes.push(make_outcome(Err(UnsuccessfulOutcome)));
+                        outcomes.push(make_outcome(Err(UnsuccessfulOutcome::default())));
                     }
                     Err(ControlFlow::Break(fatal_err)) => {
                         // This isn't a route-level error, it's a
@@ -510,8 +515,9 @@ pub mod testutils {
     use std::future::Future;
     use std::net::IpAddr;
 
+    use rand::SeedableRng;
     use rand::distr::uniform::{UniformSampler, UniformUsize};
-    use rand::rngs::mock::StepRng;
+    use rand::rngs::SmallRng;
 
     pub use super::connect::testutils::*;
     pub use super::resolve::testutils::*;
@@ -550,7 +556,7 @@ pub mod testutils {
     }
 
     pub struct FakeContext {
-        rng: RefCell<StepRng>,
+        rng: RefCell<SmallRng>,
     }
 
     impl Default for FakeContext {
@@ -562,8 +568,7 @@ pub mod testutils {
     impl FakeContext {
         pub fn new() -> Self {
             Self {
-                // Randomly chosen initial and increment values.
-                rng: StepRng::new(13618430565133050083, 8391096191305687941).into(),
+                rng: RefCell::new(SmallRng::seed_from_u64(0x1234567890abcdef)),
             }
         }
     }
@@ -590,7 +595,7 @@ pub mod testutils {
             &self,
             (): (),
             _route: R,
-            _log_tag: Arc<str>,
+            _log_tag: &str,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
             std::future::pending()
         }
@@ -608,8 +613,8 @@ mod test {
     use std::num::NonZeroU16;
     use std::sync::LazyLock;
 
-    use ::http::uri::PathAndQuery;
     use ::http::HeaderMap;
+    use ::http::uri::PathAndQuery;
     use assert_matches::assert_matches;
     use const_str::ip_addr;
     use futures_util::{Stream, StreamExt};
@@ -620,6 +625,7 @@ mod test {
     use tungstenite::protocol::WebSocketConfig;
 
     use super::*;
+    use crate::Alpn;
     use crate::certs::RootCertificates;
     use crate::dns::lookup_result::LookupResult;
     use crate::host::Host;
@@ -627,7 +633,6 @@ mod test {
     use crate::route::testutils::{FakeConnectError, FakeContext, FakeRoute};
     use crate::route::{SocksProxy, TlsProxy};
     use crate::tcp_ssl::proxy::socks;
-    use crate::Alpn;
 
     static WS_ENDPOINT: LazyLock<PathAndQuery> =
         LazyLock::new(|| PathAndQuery::from_static("/ws-path"));
@@ -772,13 +777,15 @@ mod test {
             },
         };
 
-        let provider = ConnectionProxyRouteProvider {
-            proxy: TlsProxy {
-                proxy_host: Host::Domain("tls-proxy".into()),
-                proxy_port: PROXY_PORT,
-                proxy_certs: PROXY_CERTS,
-            }
-            .into(),
+        let provider = DirectOrProxyProvider {
+            mode: DirectOrProxyMode::ProxyOnly(
+                TlsProxy {
+                    proxy_host: Host::Domain("tls-proxy".into()),
+                    proxy_port: PROXY_PORT,
+                    proxy_certs: PROXY_CERTS,
+                }
+                .into(),
+            ),
             inner: direct_provider,
         };
 
@@ -793,7 +800,7 @@ mod test {
                     alpn: None,
                     min_protocol_version: Some(boring_signal::ssl::SslVersion::TLS1_1),
                 },
-                inner: ConnectionProxyRoute::Tls {
+                inner: DirectOrProxyRoute::Proxy(ConnectionProxyRoute::Tls {
                     proxy: TlsRoute {
                         inner: TcpRoute {
                             address: Host::Domain(UnresolvedHost("tls-proxy".into())),
@@ -806,7 +813,7 @@ mod test {
                             min_protocol_version: None,
                         },
                     },
-                },
+                }),
             }]
         );
     }
@@ -829,39 +836,55 @@ mod test {
             },
         };
 
-        let provider = ConnectionProxyRouteProvider {
-            proxy: SocksProxy {
-                proxy_host: Host::Domain("socks-proxy".into()),
-                proxy_port: PROXY_PORT,
-                protocol: SOCKS_PROTOCOL,
-                resolve_hostname_locally: false,
-            }
-            .into(),
+        let provider = DirectOrProxyProvider {
+            mode: DirectOrProxyMode::ProxyThenDirect(
+                SocksProxy {
+                    proxy_host: Host::Domain("socks-proxy".into()),
+                    proxy_port: PROXY_PORT,
+                    protocol: SOCKS_PROTOCOL,
+                    resolve_hostname_locally: false,
+                }
+                .into(),
+            ),
             inner: direct_provider,
         };
 
         let routes = provider.routes(&FakeContext::new()).collect_vec();
 
-        let expected_routes = vec![TlsRoute {
-            fragment: TlsRouteFragment {
-                root_certs: ROOT_CERTS.clone(),
-                sni: Host::Domain("direct-sni".into()),
-                alpn: None,
-                min_protocol_version: Some(boring_signal::ssl::SslVersion::TLS1_1),
+        let expected_routes = vec![
+            TlsRoute {
+                fragment: TlsRouteFragment {
+                    root_certs: ROOT_CERTS.clone(),
+                    sni: Host::Domain("direct-sni".into()),
+                    alpn: None,
+                    min_protocol_version: Some(boring_signal::ssl::SslVersion::TLS1_1),
+                },
+                inner: DirectOrProxyRoute::Proxy(ConnectionProxyRoute::Socks(SocksRoute {
+                    proxy: TcpRoute {
+                        address: Host::Domain(UnresolvedHost("socks-proxy".into())),
+                        port: PROXY_PORT,
+                    },
+                    target_addr: ProxyTarget::ResolvedRemotely {
+                        name: "direct-target".into(),
+                    },
+                    target_port: TARGET_PORT,
+                    protocol: SOCKS_PROTOCOL,
+                })),
             },
-            inner: ConnectionProxyRoute::Socks(SocksRoute {
-                proxy: TcpRoute {
-                    address: Host::Domain(UnresolvedHost("socks-proxy".into())),
-                    port: PROXY_PORT,
+            TlsRoute {
+                fragment: TlsRouteFragment {
+                    root_certs: ROOT_CERTS.clone(),
+                    sni: Host::Domain("direct-sni".into()),
+                    alpn: None,
+                    min_protocol_version: Some(boring_signal::ssl::SslVersion::TLS1_1),
                 },
-                target_addr: ProxyTarget::ResolvedRemotely {
-                    name: "direct-target".into(),
-                },
-                target_port: TARGET_PORT,
-                protocol: SOCKS_PROTOCOL,
-            }),
-        }];
-        assert_eq!(routes, expected_routes);
+                inner: DirectOrProxyRoute::Direct(TcpRoute {
+                    address: UnresolvedHost("direct-target".into()),
+                    port: TARGET_PORT,
+                }),
+            },
+        ];
+        pretty_assertions::assert_eq!(expected_routes, routes);
     }
 
     #[test]
@@ -869,14 +892,13 @@ mod test {
         // Compilation-only test that makes sure we can wrap a fully-specified
         // websocket route provider with a connection proxy provider.
         fn asserts_route_type<P: RouteProvider<Route = T>, T>() {}
-        type MaybeProxyProvider<P> = DirectOrProxyProvider<P, ConnectionProxyRouteProvider<P>>;
 
         type WsProvider = WebSocketProvider<
             HttpsProvider<DomainFrontRouteProvider, TlsRouteProvider<DirectTcpRouteProvider>>,
         >;
 
         asserts_route_type::<
-            MaybeProxyProvider<WsProvider>,
+            DirectOrProxyProvider<WsProvider>,
             WebSocketRoute<
                 HttpsTlsRoute<
                     TlsRoute<
@@ -931,7 +953,7 @@ mod test {
             &self,
             (): (),
             route: R,
-            _log_tag: Arc<str>,
+            _log_tag: &str,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
             let (sender, receiver) = oneshot::channel();
             self.outgoing
@@ -965,7 +987,7 @@ mod test {
                 &resolver,
                 connector,
                 (),
-                "test".into(),
+                "test",
                 |_err: FakeConnectError| ControlFlow::<Infallible>::Continue(()),
             )
             .await
@@ -1057,7 +1079,7 @@ mod test {
             &resolver,
             connector,
             (),
-            "test".into(),
+            "test",
             |_err: FakeConnectError| ControlFlow::<Infallible>::Continue(()),
         )
         .await;
@@ -1078,7 +1100,10 @@ mod test {
             update_outcomes,
             HOSTNAMES[..SUCCESSFUL_ROUTE_INDEX]
                 .iter()
-                .map(|(_, ip)| (FakeRoute(IpAddr::V6(*ip)), Err(UnsuccessfulOutcome)))
+                .map(|(_, ip)| (
+                    FakeRoute(IpAddr::V6(*ip)),
+                    Err(UnsuccessfulOutcome::default())
+                ))
                 .chain(std::iter::once({
                     let (_, ip) = HOSTNAMES[SUCCESSFUL_ROUTE_INDEX];
                     (FakeRoute(IpAddr::V6(ip)), Ok(()))
@@ -1131,7 +1156,7 @@ mod test {
             &resolver,
             connector,
             (),
-            "test".into(),
+            "test",
             |_err: FakeConnectError| ControlFlow::<Infallible>::Continue(()),
         )
         .await;
@@ -1183,7 +1208,7 @@ mod test {
                 &resolver,
                 connector,
                 (),
-                "test".into(),
+                "test",
                 |_err: FakeConnectError| ControlFlow::<Infallible>::Continue(()),
             )
             .await
@@ -1237,7 +1262,7 @@ mod test {
                 &resolver,
                 connector,
                 (),
-                "test".into(),
+                "test",
                 |_err: FakeConnectError| ControlFlow::<Infallible>::Continue(()),
             )
             .await

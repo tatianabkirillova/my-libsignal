@@ -4,11 +4,10 @@
 //
 
 use std::future::Future;
+use std::sync::LazyLock;
 use std::time::Duration;
 
-use base64::prelude::{Engine as _, BASE64_STANDARD};
-use futures_util::stream::FuturesUnordered;
-use futures_util::StreamExt;
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use http::HeaderValue;
 use tokio::time::Instant;
 
@@ -37,22 +36,6 @@ where
         Ok(r) => r,
         Err(_) => Err(timeout_error),
     }
-}
-
-/// Takes a series of `Future` objects that all return a `Result<T, E>`
-/// and returns when the first of them completes successfully.
-///
-/// Errors from the failed futures are deliberately ignored by this helper method.
-/// If error processing is needed, the caller should pass futures that inspect their errors.
-pub async fn first_ok<T, E, F, I>(futures: I) -> Option<T>
-where
-    F: Future<Output = Result<T, E>>,
-    I: IntoIterator<Item = F>,
-{
-    FuturesUnordered::from_iter(futures)
-        .filter_map(|result| std::future::ready(result.ok()))
-        .next()
-        .await
 }
 
 /// In the tokio time paused test mode, if some logic is supposed to wake up at specific time
@@ -131,10 +114,16 @@ pub async fn timed<T>(f: impl Future<Output = T>) -> (Duration, T) {
 /// The type used by ongoing operations to track network change events.
 pub type NetworkChangeEvent = tokio::sync::watch::Receiver<()>;
 
+pub fn no_network_change_events() -> NetworkChangeEvent {
+    static SENDER_THAT_NEVER_SENDS: LazyLock<tokio::sync::watch::Sender<()>> =
+        LazyLock::new(Default::default);
+    SENDER_THAT_NEVER_SENDS.subscribe()
+}
+
 #[cfg(any(test, feature = "test-util"))]
 pub mod testutil {
-    use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
 
     /// Usable as a [Waker](std::task::Waker) for async polling.
     #[derive(Debug, Default)]
@@ -168,40 +157,13 @@ pub mod testutil {
 #[cfg(test)]
 mod test {
     use std::future::Future;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use tokio::time;
 
     use super::*;
-    use crate::utils::sleep_and_catch_up;
-
-    #[tokio::test(start_paused = true)]
-    async fn first_ok_picks_the_result_from_earliest_finished_future() {
-        let future_1 = future(30, Ok(1));
-        let future_2 = future(10, Ok(2));
-        let future_3 = future(20, Ok(3));
-        let result = first_ok(vec![future_1, future_2, future_3]).await.unwrap();
-        assert_eq!(2, result);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn first_ok_ignores_failed_futures() {
-        let future_1 = future(30, Ok(1));
-        let future_2 = future(10, Err("error"));
-        let future_3 = future(20, Ok(3));
-        let result = first_ok(vec![future_1, future_2, future_3]).await.unwrap();
-        assert_eq!(3, result);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn first_ok_returns_none_if_all_failed() {
-        let future_1 = future(30, Err("error 1"));
-        let future_2 = future(10, Err("error 2"));
-        let future_3 = future(20, Err("error 3"));
-        assert!(first_ok(vec![future_1, future_2, future_3]).await.is_none())
-    }
 
     #[tokio::test(start_paused = true)]
     async fn sleep_and_catch_up_showcase() {
@@ -221,10 +183,5 @@ mod test {
         assert!(!test(time::sleep(DURATION)).await);
         assert!(!test(time::advance(DURATION)).await);
         assert!(test(sleep_and_catch_up(DURATION)).await);
-    }
-
-    async fn future(delay: u64, result: Result<u32, &str>) -> Result<u32, &str> {
-        tokio::time::sleep(Duration::from_millis(delay)).await;
-        result
     }
 }

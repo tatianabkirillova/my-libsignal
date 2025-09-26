@@ -9,7 +9,7 @@ use std::time::Duration;
 use http::{HeaderName, HeaderValue};
 use tokio_boring_signal::HandshakeError;
 
-use crate::{certs, AsStaticHttpHeader};
+use crate::{AsStaticHttpHeader, certs};
 
 pub trait LogSafeDisplay: Display {}
 
@@ -30,8 +30,6 @@ pub enum TransportConnectError {
     InvalidConfiguration,
     /// Failed to establish TCP connection to any of the IPs
     TcpConnectionFailed,
-    /// DNS lookup failed
-    DnsError,
     /// SSL error: {0}
     SslError(SslErrorReasons),
     /// Failed to load certificates
@@ -150,7 +148,6 @@ impl From<TransportConnectError> for std::io::Error {
             | TransportConnectError::SslError(_)
             | TransportConnectError::CertError
             | TransportConnectError::ProxyProtocol => ErrorKind::InvalidData,
-            TransportConnectError::DnsError => ErrorKind::NotFound,
             TransportConnectError::ClientAbort => ErrorKind::ConnectionAborted,
         };
         Self::new(kind, value.to_string())

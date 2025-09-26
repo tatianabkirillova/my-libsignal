@@ -4,17 +4,21 @@
 //
 
 import { assert } from 'chai';
-import * as MessageBackup from '../MessageBackup';
-import * as util from './util';
-import { Aci } from '../Address';
-import { Uint8ArrayInputStream, ErrorInputStream } from './ioutil';
+import * as MessageBackup from '../MessageBackup.js';
+import * as util from './util.js';
+import { Aci } from '../Address.js';
+import { Uint8ArrayInputStream, ErrorInputStream } from './ioutil.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { hkdf, LogLevel } from '..';
-import { AccountEntropyPool, BackupKey } from '../AccountKeys';
+import { hkdf, LogLevel } from '../index.js';
+import {
+  AccountEntropyPool,
+  BackupForwardSecrecyToken,
+  BackupKey,
+} from '../AccountKeys.js';
 import { Readable } from 'node:stream';
-import { InputStream } from '../io';
-import { assertArrayNotEquals } from './util';
+import { InputStream } from '../io.js';
+import { assertArrayNotEquals } from './util.js';
 
 util.initLogger(LogLevel.Trace);
 
@@ -35,10 +39,46 @@ describe('MessageBackup', () => {
   const testKey = new MessageBackup.MessageBackupKey({ accountEntropy, aci });
   const purpose = MessageBackup.Purpose.RemoteBackup;
 
+  describe('MessageBackupKey', () => {
+    it('provides its HMAC and AES keys', () => {
+      // Just check some basic expectations.
+      assert.equal(32, testKey.hmacKey.length);
+      assert.equal(32, testKey.aesKey.length);
+      assertArrayNotEquals(testKey.hmacKey, testKey.aesKey);
+    });
+
+    it('can derive from a forward secrecy token', () => {
+      const forwardSecrecyToken = new BackupForwardSecrecyToken(
+        new Uint8Array(32).fill(0xbf)
+      );
+      const keyFromAep = new MessageBackup.MessageBackupKey({
+        accountEntropy,
+        aci,
+        forwardSecrecyToken,
+      });
+      assertArrayNotEquals(keyFromAep.aesKey, testKey.aesKey);
+
+      const backupKey = new BackupKey(new Uint8Array(32).fill(0xba));
+      const backupId = new Uint8Array(16).fill(0x1d);
+      const keyFromBackupInfo = new MessageBackup.MessageBackupKey({
+        backupKey,
+        backupId,
+        forwardSecrecyToken,
+      });
+      assertArrayNotEquals(
+        keyFromBackupInfo.aesKey,
+        new MessageBackup.MessageBackupKey({ backupKey, backupId }).aesKey
+      );
+    });
+  });
+
   describe('validate', () => {
     it('successfully validates a minimal backup', async () => {
       const input = fs.readFileSync(
-        path.join(__dirname, '../../ts/test/new_account.binproto.encrypted')
+        path.join(
+          import.meta.dirname,
+          '../../ts/test/new_account.binproto.encrypted'
+        )
       );
 
       const outcome = await MessageBackup.validate(
@@ -79,21 +119,19 @@ describe('MessageBackup', () => {
       assert.equal(outcome2.errorMessage, null);
     });
 
-    it('provides its HMAC and AES keys', () => {
-      // Just check some basic expectations.
-      assert.equal(32, testKey.hmacKey.length);
-      assert.equal(32, testKey.aesKey.length);
-      assertArrayNotEquals(testKey.hmacKey, testKey.aesKey);
-    });
-
-    it('produces an error message on empty input', async () => {
-      const outcome = await MessageBackup.validate(
-        testKey,
-        purpose,
-        () => new Uint8ArrayInputStream(new Uint8Array()),
-        0n
-      );
-      assert.equal(outcome.errorMessage, 'not enough bytes for an HMAC');
+    it('throws on empty input', async () => {
+      try {
+        await MessageBackup.validate(
+          testKey,
+          purpose,
+          () => new Uint8ArrayInputStream(new Uint8Array()),
+          0n
+        );
+        assert.fail('did not throw');
+      } catch (e) {
+        assert.instanceOf(e, Error);
+        assert.equal(e.message, 'unexpected end of file');
+      }
     });
 
     it('throws a raised IO error', async () => {
@@ -129,16 +167,17 @@ describe('MessageBackup', () => {
         /* eslint-enable @typescript-eslint/require-await */
       }
 
-      const outcome = await MessageBackup.validate(
-        testKey,
-        purpose,
-        () => {
-          openCount += 1;
-          return new CloseCountingInputStream();
-        },
-        0n
+      await assert.isRejected(
+        MessageBackup.validate(
+          testKey,
+          purpose,
+          () => {
+            openCount += 1;
+            return new CloseCountingInputStream();
+          },
+          0n
+        )
       );
-      assert.equal(outcome.errorMessage, 'not enough bytes for an HMAC');
       assert.isAbove(openCount, 0, 'never opened?');
       assert.equal(openCount, closeCount, 'failed to close all streams');
     });
@@ -146,7 +185,7 @@ describe('MessageBackup', () => {
 });
 
 const exampleBackup = fs.readFileSync(
-  path.join(__dirname, '../../ts/test/canonical-backup.binproto')
+  path.join(import.meta.dirname, '../../ts/test/canonical-backup.binproto')
 );
 
 describe('ComparableBackup', () => {
@@ -159,7 +198,10 @@ describe('ComparableBackup', () => {
       );
 
       const expectedOutput = fs.readFileSync(
-        path.join(__dirname, '../../ts/test/canonical-backup.expected.json')
+        path.join(
+          import.meta.dirname,
+          '../../ts/test/canonical-backup.expected.json'
+        )
       );
       const output = comparable.comparableString();
       assert.equal(output, new String(expectedOutput));
@@ -173,7 +215,7 @@ describe('OnlineBackupValidator', () => {
     // Here we override that `read` member with one that always produces a Uint8Array,
     // for more convenient use in the test. Note that this is unchecked.
     type ReadableUsingUint8Array = Omit<Readable, 'read'> & {
-      read(size: number): Uint8Array;
+      read: (size: number) => Uint8Array;
     };
     const input: ReadableUsingUint8Array = new Readable();
     input.push(exampleBackup);

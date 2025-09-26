@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::convert::Infallible;
 use std::time::Duration;
 
 use http::uri::InvalidUri;
@@ -12,7 +13,10 @@ use libsignal_bridge_types::net::chat::*;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_bridge_types::support::AsType;
 use libsignal_net::auth::Auth;
-use libsignal_net::chat::{self, ConnectError, Response as ChatResponse, SendError};
+use libsignal_net::chat::{self, ConnectError, LanguageList, Response as ChatResponse, SendError};
+use libsignal_net_chat::api::RequestError;
+use libsignal_net_chat::api::usernames::UnauthenticatedChatApi;
+use uuid::Uuid;
 
 use crate::support::*;
 use crate::*;
@@ -58,12 +62,12 @@ fn HttpRequest_add_header(
 
 #[bridge_fn(jni = false)]
 fn ChatConnectionInfo_local_port(connection_info: &ChatConnectionInfo) -> u16 {
-    connection_info.transport_info.local_port
+    connection_info.transport_info.local_addr.port()
 }
 
 #[bridge_fn(jni = false)]
 fn ChatConnectionInfo_ip_version(connection_info: &ChatConnectionInfo) -> u8 {
-    connection_info.transport_info.ip_version as u8
+    connection_info.transport_info.ip_version() as u8
 }
 
 #[bridge_fn(jni = false)]
@@ -74,9 +78,9 @@ fn ChatConnectionInfo_description(connection_info: &ChatConnectionInfo) -> Strin
 #[bridge_io(TokioAsyncContext)]
 async fn UnauthenticatedChatConnection_connect(
     connection_manager: &ConnectionManager,
-    languages: Box<[String]>,
+    languages: LanguageList,
 ) -> Result<UnauthenticatedChatConnection, ConnectError> {
-    UnauthenticatedChatConnection::connect(connection_manager, &languages).await
+    UnauthenticatedChatConnection::connect(connection_manager, languages).await
 }
 
 #[bridge_fn]
@@ -115,6 +119,17 @@ fn UnauthenticatedChatConnection_info(chat: &UnauthenticatedChatConnection) -> C
 }
 
 #[bridge_io(TokioAsyncContext)]
+async fn UnauthenticatedChatConnection_look_up_username_hash(
+    chat: &UnauthenticatedChatConnection,
+    hash: Box<[u8]>,
+) -> Result<Option<Uuid>, RequestError<Infallible>> {
+    Ok(chat
+        .as_typed(|chat| chat.look_up_username_hash(&hash))
+        .await?
+        .map(|aci| aci.into()))
+}
+
+#[bridge_io(TokioAsyncContext)]
 async fn AuthenticatedChatConnection_preconnect(
     connection_manager: &ConnectionManager,
 ) -> Result<(), ConnectError> {
@@ -127,13 +142,13 @@ async fn AuthenticatedChatConnection_connect(
     username: String,
     password: String,
     receive_stories: bool,
-    languages: Box<[String]>,
+    languages: LanguageList,
 ) -> Result<AuthenticatedChatConnection, ConnectError> {
     AuthenticatedChatConnection::connect(
         connection_manager,
         Auth { username, password },
         receive_stories,
-        &languages,
+        languages,
     )
     .await
 }

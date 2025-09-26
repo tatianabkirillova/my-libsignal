@@ -87,7 +87,7 @@ where
         &self,
         over: Over,
         route: R,
-        log_tag: std::sync::Arc<str>,
+        log_tag: &str,
     ) -> Result<Self::Connection, Self::Error> {
         // We need our own Receiver so that multiple connections can be going at once.
         let mut network_change_event = self.network_change_event.clone();
@@ -125,7 +125,7 @@ where
             }
         };
 
-        let connect = self.inner.connect_over(over, route, log_tag.clone());
+        let connect = self.inner.connect_over(over, route, log_tag);
         tokio::select! {
             result = connect => result.map_err(InterfaceChangedOr::Other),
             change_reason = network_change_timeout => {
@@ -171,6 +171,22 @@ impl GetCurrentInterface for DefaultGetCurrentInterface {
     }
 }
 
+/// Convenient for tests.
+#[cfg(any(test, feature = "test-util"))]
+impl<T, F: Fn(IpAddr) -> T> GetCurrentInterface for F
+where
+    T: Future<Output: Eq + Send + Sync> + Send,
+{
+    type Representation = T::Output;
+
+    fn get_interface_for(
+        &self,
+        target: IpAddr,
+    ) -> impl Future<Output = Self::Representation> + Send {
+        self(target)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::convert::Infallible;
@@ -184,21 +200,6 @@ mod test {
     use super::*;
     use crate::route::testutils::{ConnectFn, FakeConnectError, NeverConnect};
     use crate::route::{ConnectorExt as _, TcpRoute};
-
-    /// Convenient for tests.
-    impl<T, F: Fn(IpAddr) -> T> GetCurrentInterface for F
-    where
-        T: Future<Output: Eq + Send + Sync> + Send,
-    {
-        type Representation = T::Output;
-
-        fn get_interface_for(
-            &self,
-            target: IpAddr,
-        ) -> impl Future<Output = Self::Representation> + Send {
-            self(target)
-        }
-    }
 
     const ROUTE_CHANGE_INTERVAL: Duration = Duration::from_secs(10);
     const POST_CHANGE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -252,7 +253,7 @@ mod test {
             port: nonzero!(443u16),
         };
 
-        let result = connector.connect(route, "test".into()).await;
+        let result = connector.connect(route, "test").await;
 
         assert!(!background_task.is_finished(), "only exits on panic");
         background_task.abort();
@@ -288,7 +289,7 @@ mod test {
         let start = Instant::now();
         let actual_result: Result<(), InterfaceChangedOr<FakeConnectError>> = try_connection(
             change_events,
-            ConnectFn(|_over, _route, _log_tag| {
+            ConnectFn(|_over, _route| {
                 let result = result.clone();
                 async move {
                     tokio::time::sleep(delay).await;

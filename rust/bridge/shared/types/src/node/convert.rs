@@ -21,7 +21,7 @@ use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::ChatListener;
 use crate::node::chat::NodeChatListener;
-use crate::support::{extend_lifetime, Array, AsType, FixedLengthBincodeSerializable, Serialized};
+use crate::support::{Array, AsType, FixedLengthBincodeSerializable, Serialized, extend_lifetime};
 
 /// Converts arguments from their JavaScript form to their Rust form.
 ///
@@ -386,6 +386,16 @@ impl SimpleArgTypeInfo for Box<[String]> {
                 String::convert_from(cx, next)
             })
             .collect()
+    }
+}
+
+impl SimpleArgTypeInfo for libsignal_net::chat::LanguageList {
+    type ArgType = JsArray;
+
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        let entries = Box::<[String]>::convert_from(cx, foreign)?;
+        libsignal_net::chat::LanguageList::parse(&entries)
+            .or_else(|_| cx.throw_error("invalid language in list"))
     }
 }
 
@@ -781,6 +791,36 @@ impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context>
     }
 }
 
+impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context>
+    for &'storage libsignal_account_keys::BackupKey
+{
+    type ArgType = JsTypedArray<u8>;
+    type StoredType = AssumedImmutableBuffer<'context>;
+    fn borrow(
+        cx: &mut FunctionContext<'context>,
+        foreign: Handle<'context, Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::borrow(cx, foreign)
+    }
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::load_from(stored).into()
+    }
+}
+
+impl<'storage> AsyncArgTypeInfo<'storage> for &'storage libsignal_account_keys::BackupKey {
+    type ArgType = JsTypedArray<u8>;
+    type StoredType = PersistentAssumedImmutableBuffer;
+    fn save_async_arg(
+        cx: &mut FunctionContext,
+        foreign: Handle<Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::save_async_arg(cx, foreign)
+    }
+    fn load_async_arg(stored: &'storage mut Self::StoredType) -> Self {
+        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::load_async_arg(stored).into()
+    }
+}
+
 impl<'a> ResultTypeInfo<'a> for bool {
     type ResultType = JsBoolean;
     fn convert_into(self, cx: &mut impl Context<'a>) -> NeonResult<Handle<'a, Self::ResultType>> {
@@ -947,6 +987,30 @@ impl<'storage, 'context: 'storage, const LEN: usize> ArgTypeInfo<'storage, 'cont
     }
     fn load_from(stored: &'storage mut Self::StoredType) -> Self {
         stored.buffer.try_into().expect("checked length already")
+    }
+}
+
+/// Loads from a JsUint8Array, assuming it won't be mutated while in use.
+/// See [`PersistentAssumedImmutableBuffer`].
+impl<'storage, const LEN: usize> AsyncArgTypeInfo<'storage> for &'storage [u8; LEN] {
+    type ArgType = JsUint8Array;
+    type StoredType = PersistentAssumedImmutableBuffer;
+    fn save_async_arg(
+        cx: &mut FunctionContext,
+        foreign: Handle<Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        let result = PersistentAssumedImmutableBuffer::new(cx, foreign);
+        if result.len() != LEN {
+            cx.throw_error(format!(
+                "buffer has incorrect length {} (expected {})",
+                result.len(),
+                LEN
+            ))?;
+        }
+        Ok(result)
+    }
+    fn load_async_arg(stored: &'storage mut Self::StoredType) -> Self {
+        (&**stored).try_into().expect("checked length already")
     }
 }
 
@@ -1455,6 +1519,46 @@ impl<T: Send + Sync + 'static> Finalize for PersistentBorrowedJsBoxedBridgeHandl
     }
 }
 
+/// Synchronous borrow of `&'a T` from a `JsArray` of wrappers with `_nativeHandle: JsBox<T>`.
+///
+/// Modeled after `PersistentArrayOfBorrowedJsBoxedBridgeHandles` but for sync contexts.
+///
+/// Holds the array `Handle<'a, JsArray>` so wrappers (and their `JsBox<T>`) remain reachable
+/// for the lifetime `'a` of the current Neon handle scope.
+pub struct ArrayOfBorrowedJsBoxedBridgeHandles<'a, T> {
+    // Explicitly show the ownership relationship of the parent array for lifetime of the struct.
+    _owner: Handle<'a, JsArray>,
+    value_refs: Vec<&'a T>,
+}
+
+impl<'a, T: BridgeHandle<Strategy = Immutable<T>>> ArrayOfBorrowedJsBoxedBridgeHandles<'a, T> {
+    /// Creates a new array of borrowed handles from a JavaScript array.
+    ///
+    /// The array must contain objects with a `_nativeHandle` property pointing to a boxed Rust value.
+    pub(crate) fn new(cx: &mut impl Context<'a>, array: Handle<'a, JsArray>) -> NeonResult<Self> {
+        let len = array.len(cx);
+        let value_refs = (0..len)
+            .map(|i| {
+                let element: Handle<JsObject> = array.get(cx, i)?;
+                let value_box: Handle<DefaultJsBox<T>> = element.get(cx, NATIVE_HANDLE_PROPERTY)?;
+                // Use as_inner() to get a reference with lifetime 'a (the handle scope)
+                // This is safe because the array handle keeps everything alive for 'a, and the handle is
+                // immutable so we should not have any aliasing issues.
+                let value_ref: &'a T = value_box.as_inner();
+                Ok(value_ref)
+            })
+            .collect::<NeonResult<Vec<&'a T>>>()?;
+        Ok(Self {
+            _owner: array,
+            value_refs,
+        })
+    }
+
+    pub(crate) fn value_refs(&self) -> &[&T] {
+        &self.value_refs
+    }
+}
+
 /// Safely persists an array of boxed Rust values by treating the array as a GC root.
 ///
 /// The array must contain wrapper objects that refer to an underlying `JsBox<T>`.
@@ -1522,6 +1626,24 @@ impl<'storage, T: BridgeHandle<Strategy = Immutable<T>> + Sync> AsyncArgTypeInfo
         PersistentArrayOfBorrowedJsBoxedBridgeHandles::new(cx, foreign)
     }
     fn load_async_arg(stored: &'storage mut Self::StoredType) -> Self {
+        stored.value_refs()
+    }
+}
+
+impl<'storage, 'context: 'storage, T: BridgeHandle<Strategy = Immutable<T>> + Sync>
+    ArgTypeInfo<'storage, 'context> for &'storage [&'storage T]
+{
+    type ArgType = JsArray;
+    type StoredType = ArrayOfBorrowedJsBoxedBridgeHandles<'context, T>;
+
+    fn borrow(
+        cx: &mut FunctionContext<'context>,
+        foreign: Handle<'context, Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        ArrayOfBorrowedJsBoxedBridgeHandles::new(cx, foreign)
+    }
+
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
         stored.value_refs()
     }
 }

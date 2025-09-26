@@ -5,28 +5,23 @@
 
 use std::default::Default;
 
-use http::StatusCode;
-use libsignal_core::{Aci, Pni, E164};
+use libsignal_core::{Aci, E164, Pni};
 use libsignal_net_infra::errors::{LogSafeDisplay, RetryLater, TransportConnectError};
-use libsignal_net_infra::extract_retry_later;
-use libsignal_net_infra::route::{
-    RouteProvider, ThrottlingConnector, UnresolvedWebsocketServiceRoute,
-};
-use libsignal_net_infra::ws::{NextOrClose, WebSocketConnectError, WebSocketServiceError};
-use libsignal_net_infra::ws2::attested::{
+use libsignal_net_infra::route::{RouteProvider, UnresolvedWebsocketServiceRoute};
+use libsignal_net_infra::ws::attested::{
     AttestedConnection, AttestedConnectionError, AttestedProtocolError,
 };
+use libsignal_net_infra::ws::{NextOrClose, WebSocketConnectError, WebSocketError};
 use prost::Message as _;
 use thiserror::Error;
-use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::CloseFrame;
+use tungstenite::protocol::frame::coding::CloseCode;
 use uuid::Uuid;
 
 use crate::auth::Auth;
 use crate::connect_state::{ConnectionResources, WebSocketTransportConnectorFactory};
 use crate::enclave::{Cdsi, EndpointParams};
 use crate::proto::cds2::{ClientRequest, ClientResponse};
-use crate::ws::WebSocketServiceConnectError;
 
 trait FixedLengthSerializable {
     const SERIALIZED_LEN: usize;
@@ -136,21 +131,8 @@ pub struct LookupResponseEntry {
     pub pni: Option<Pni>,
 }
 
-#[derive(Debug, PartialEq)]
-pub enum LookupResponseParseError {
-    InvalidNumberOfBytes { actual_length: usize },
-}
-
-impl From<LookupResponseParseError> for LookupError {
-    fn from(value: LookupResponseParseError) -> Self {
-        match value {
-            LookupResponseParseError::InvalidNumberOfBytes { .. } => Self::ParseError,
-        }
-    }
-}
-
 impl TryFrom<ClientResponse> for LookupResponse {
-    type Error = LookupResponseParseError;
+    type Error = CdsiProtocolError;
 
     fn try_from(response: ClientResponse) -> Result<Self, Self::Error> {
         let ClientResponse {
@@ -160,7 +142,7 @@ impl TryFrom<ClientResponse> for LookupResponse {
         } = response;
 
         if e164_pni_aci_triples.len() % LookupResponseEntry::SERIALIZED_LEN != 0 {
-            return Err(LookupResponseParseError::InvalidNumberOfBytes {
+            return Err(CdsiProtocolError::InvalidNumberOfBytes {
                 actual_length: e164_pni_aci_triples.len(),
             });
         }
@@ -236,35 +218,36 @@ impl AsMut<AttestedConnection> for CdsiConnection {
 pub enum LookupError {
     /// SGX attestation failed.
     AttestationError(attest::enclave::Error),
-    /// invalid response received from the server
-    InvalidResponse,
     /// retry later
     RateLimited(#[from] RetryLater),
     /// request token was invalid
     InvalidToken,
-    /// failed to parse the response from the server
-    ParseError,
     /// protocol error after establishing a connection: {0}
     EnclaveProtocol(AttestedProtocolError),
     /// transport failed: {0}
     ConnectTransport(TransportConnectError),
     /// websocket error: {0}
-    WebSocket(WebSocketServiceError),
-    /// connect attempt timed out
-    ConnectionTimedOut,
+    WebSocket(WebSocketError),
+    /// no connection attempts succeeded before timeout
+    AllConnectionAttemptsFailed,
     /// request was invalid: {server_reason}
     InvalidArgument { server_reason: String },
     /// server error: {reason}
     Server { reason: &'static str },
     /// CDS protocol: {0}
-    CdsiProtocol(CdsiProtocolError),
+    CdsiProtocol(#[from] CdsiProtocolError),
 }
 
 #[derive(Debug, Error, displaydoc::Display)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum CdsiProtocolError {
     /// no token found in response
     NoTokenInResponse,
+    /// could not parse response triples ({actual_length} bytes)
+    InvalidNumberOfBytes { actual_length: usize },
 }
+
+impl LogSafeDisplay for CdsiProtocolError {}
 
 impl From<AttestedConnectionError> for LookupError {
     fn from(value: AttestedConnectionError) -> Self {
@@ -280,28 +263,15 @@ impl From<crate::enclave::Error> for LookupError {
     fn from(value: crate::enclave::Error) -> Self {
         use crate::enclave::Error;
         match value {
-            Error::WebSocketConnect(err) => match err {
-                WebSocketServiceConnectError::RejectedByServer {
-                    response,
-                    received_at: _,
-                } => {
-                    if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                        if let Some(retry_later) = extract_retry_later(response.headers()) {
-                            return Self::RateLimited(retry_later);
-                        }
-                    }
-                    Self::WebSocket(WebSocketServiceError::Http(response))
-                }
-                WebSocketServiceConnectError::Connect(e, _) => match e {
-                    WebSocketConnectError::Timeout => Self::ConnectionTimedOut,
-                    WebSocketConnectError::Transport(e) => Self::ConnectTransport(e),
-                    WebSocketConnectError::WebSocketError(e) => Self::WebSocket(e.into()),
-                },
+            Error::WebSocketConnect(e) => match e {
+                WebSocketConnectError::Transport(e) => Self::ConnectTransport(e),
+                WebSocketConnectError::WebSocketError(e) => Self::WebSocket(e),
             },
+            Error::RateLimited(inner) => Self::RateLimited(inner),
             Error::AttestationError(err) => Self::AttestationError(err),
             Error::WebSocket(err) => Self::WebSocket(err),
             Error::Protocol(error) => Self::EnclaveProtocol(error),
-            Error::ConnectionTimedOut => Self::ConnectionTimedOut,
+            Error::AllConnectionAttemptsFailed => Self::AllConnectionAttemptsFailed,
         }
     }
 }
@@ -325,27 +295,12 @@ impl CdsiConnection {
     pub async fn connect_with(
         connection_resources: ConnectionResources<'_, impl WebSocketTransportConnectorFactory>,
         route_provider: impl RouteProvider<Route = UnresolvedWebsocketServiceRoute>,
-        ws_config: crate::infra::ws2::Config,
+        ws_config: crate::infra::ws::Config,
         params: &EndpointParams<'_, Cdsi>,
-        auth: Auth,
+        auth: &Auth,
     ) -> Result<Self, LookupError> {
         let (connection, _route_info) = connection_resources
-            .connect_attested_ws(
-                route_provider,
-                auth,
-                (
-                    ws_config,
-                    // We don't want to race multiple websocket handshakes because when
-                    // we take the first one, the others will be uncermoniously closed.
-                    // That looks like unexpected behavior at the server end, and the
-                    // wasted handshakes consume resources unnecessarily.  Instead,
-                    // allow parallelism at the transport level but throttle the number
-                    // of websocket handshakes that can complete.
-                    ThrottlingConnector::new(crate::infra::ws::WithoutResponseHeaders::new(), 1),
-                ),
-                "cdsi".into(),
-                params,
-            )
+            .connect_attested_ws(route_provider, auth, ws_config, "cdsi".into(), params)
             .await?;
         Ok(Self(connection))
     }
@@ -516,20 +471,20 @@ mod test {
     use const_str::hex;
     use itertools::Itertools as _;
     use libsignal_net_infra::dns::DnsResolver;
-    use libsignal_net_infra::route::testutils::ConnectFn;
     use libsignal_net_infra::route::DirectOrProxyProvider;
-    use libsignal_net_infra::testutil::no_network_change_events;
-    use libsignal_net_infra::ws::testutil::fake_websocket;
-    use libsignal_net_infra::ws2::attested::testutil::{
-        run_attested_server, AttestedServerOutput, FAKE_ATTESTATION,
+    use libsignal_net_infra::route::testutils::ConnectFn;
+    use libsignal_net_infra::utils::no_network_change_events;
+    use libsignal_net_infra::ws::attested::testutil::{
+        AttestedServerOutput, FAKE_ATTESTATION, run_attested_server,
     };
+    use libsignal_net_infra::ws::testutil::fake_websocket;
     use libsignal_net_infra::{
-        AsStaticHttpHeader as _, EnableDomainFronting, RECOMMENDED_WS2_CONFIG,
+        AsStaticHttpHeader as _, EnableDomainFronting, RECOMMENDED_WS_CONFIG,
     };
     use nonzero_ext::nonzero;
     use tokio_stream::wrappers::UnboundedReceiverStream;
-    use tungstenite::protocol::frame::coding::CloseCode;
     use tungstenite::protocol::CloseFrame;
+    use tungstenite::protocol::frame::coding::CloseCode;
     use uuid::Uuid;
     use warp::Filter as _;
 
@@ -708,7 +663,7 @@ mod test {
         }
     }
 
-    const FAKE_WS_CONFIG: libsignal_net_infra::ws2::Config = libsignal_net_infra::ws2::Config {
+    const FAKE_WS_CONFIG: libsignal_net_infra::ws::Config = libsignal_net_infra::ws::Config {
         local_idle_timeout: Duration::from_secs(5),
         remote_idle_ping_timeout: Duration::from_secs(100),
         remote_idle_disconnect_timeout: Duration::from_secs(100),
@@ -977,7 +932,7 @@ mod test {
                 .serve_incoming(UnboundedReceiverStream::new(incoming_connections)),
         );
 
-        let connector = ConnectFn(|(), _route, _log_tag| {
+        let connector = ConnectFn(|(), _route| {
             let (local, remote) = tokio::io::duplex(1024);
             tx_connections
                 .send(Ok::<_, TransportConnectError>(local))
@@ -986,7 +941,7 @@ mod test {
         });
 
         let env = crate::env::PROD;
-        let ws2_config = RECOMMENDED_WS2_CONFIG;
+        let ws2_config = RECOMMENDED_WS_CONFIG;
         let auth = Auth {
             username: "username".to_string(),
             password: "password".to_string(),
@@ -1007,14 +962,13 @@ mod test {
                 network_change_event: &network_change_event,
                 confirmation_header_name: None,
             },
-            DirectOrProxyProvider::maybe_proxied(
+            DirectOrProxyProvider::direct(
                 env.cdsi
                     .enclave_websocket_provider(EnableDomainFronting::No),
-                None,
             ),
             ws2_config,
             &env.cdsi.params,
-            auth,
+            &auth,
         )
         .await;
 

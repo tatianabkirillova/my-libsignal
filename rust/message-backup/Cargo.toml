@@ -5,8 +5,8 @@
 [package]
 name = "libsignal-message-backup"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.85"
 authors.workspace = true
 license.workspace = true
 
@@ -17,7 +17,12 @@ workspace = true
 # Enables code to allow conversion of backups to and from JSON.
 json = ["dep:serde_json", "dep:protobuf-json-mapping"]
 scramble = ["dep:rand"]
+cli = ["dep:clap", "dep:clap-stdin", "dep:env_logger"]
 test-util = []
+
+[[bin]]
+name = "validator"
+required-features = ["cli"]
 
 [[example]]
 name = "json_to_binproto"
@@ -42,6 +47,7 @@ libsignal-message-backup-macros = { path = "macros" }
 libsignal-account-keys = { workspace = true }
 libsignal-core = { workspace = true }
 libsignal-protocol = { workspace = true }
+libsignal-svrb = { workspace = true }
 signal-crypto = { workspace = true }
 usernames = { workspace = true }
 zkcredential = { workspace = true, features = ["rayon"] }
@@ -53,12 +59,12 @@ assert_matches = { workspace = true }
 async-compression = { workspace = true, features = ["futures-io", "gzip"] }
 async-trait = { workspace = true }
 cbc = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
-clap-stdin = { workspace = true }
+clap = { workspace = true, features = ["derive"], optional = true }
+clap-stdin = { workspace = true, optional = true }
 derive-where = { workspace = true }
 derive_more = { workspace = true, features = ["from", "into_iterator", "try_from"] }
 displaydoc = { workspace = true }
-env_logger = { workspace = true }
+env_logger = { workspace = true, optional = true }
 futures = { workspace = true }
 hex = { workspace = true, features = ["serde"] }
 hkdf = { workspace = true }
@@ -68,6 +74,7 @@ itertools = { workspace = true }
 log = { workspace = true }
 macro_rules_attribute = { workspace = true }
 mediasan-common = { workspace = true }
+prost = { workspace = true }
 protobuf = { workspace = true }
 protobuf-json-mapping = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
@@ -83,12 +90,11 @@ uuid = { workspace = true, features = ["serde"] }
 visibility = { workspace = true }
 
 [dev-dependencies]
-libsignal-message-backup = { path = "./", features = ["json", "scramble", "test-util"] }
+libsignal-message-backup = { path = "./", features = ["cli", "json", "scramble", "test-util"] }
 
 libsignal-cli-utils = { workspace = true }
 signal-crypto = { workspace = true }
 
-array-concat = { workspace = true, features = ["const_panic"] }
 assert_cmd = { workspace = true }
 const-str = { workspace = true }
 criterion = { workspace = true }

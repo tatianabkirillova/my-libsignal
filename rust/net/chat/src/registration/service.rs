@@ -15,6 +15,7 @@ use libsignal_net::chat::{
     ChatConnection, ConnectError as ChatConnectError, SendError as ChatSendError,
 };
 use libsignal_net::infra::errors::{LogSafeDisplay, RetryLater};
+use libsignal_net::infra::route::UnsuccessfulOutcome;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
 use tokio_stream::wrappers::ReceiverStream;
@@ -180,7 +181,8 @@ impl SendError for ErrorResponse {
 
 const CHAT_CONNECT_DELAY_PARAMS: libsignal_net::infra::route::ConnectionOutcomeParams =
     libsignal_net::infra::route::ConnectionOutcomeParams {
-        age_cutoff: Duration::from_secs(60),
+        short_term_age_cutoff: Duration::from_secs(60),
+        long_term_age_cutoff: Duration::from_secs(60),
         cooldown_growth_factor: 1.5,
         count_growth_factor: 10.0,
         max_count: 5,
@@ -208,7 +210,7 @@ async fn spawn_connected_chat(
                 );
                 match err {
                     ChatConnectError::InvalidConnectionConfiguration => {
-                        return Err(FatalConnectError::InvalidConfiguration)
+                        return Err(FatalConnectError::InvalidConfiguration);
                     }
                     ChatConnectError::RetryLater(retry_later) => {
                         return Err(FatalConnectError::RetryLater(retry_later));
@@ -221,8 +223,11 @@ async fn spawn_connected_chat(
                         let since_last_failure = last_failure_at
                             .replace(now)
                             .map_or(Duration::MAX, |previous_failure| now - previous_failure);
-                        let delay = CHAT_CONNECT_DELAY_PARAMS
-                            .compute_delay(since_last_failure, failure_count);
+                        let delay = CHAT_CONNECT_DELAY_PARAMS.compute_delay(
+                            UnsuccessfulOutcome::ShortTerm,
+                            since_last_failure,
+                            failure_count,
+                        );
                         tokio::time::sleep(delay).await;
                         failure_count += 1;
                         continue;
@@ -230,7 +235,7 @@ async fn spawn_connected_chat(
                     ChatConnectError::AppExpired => {
                         return Err(FatalConnectError::Unexpected(
                             "unauthenticated socket signaled app expired",
-                        ))
+                        ));
                     }
                     ChatConnectError::DeviceDeregistered => {
                         return Err(FatalConnectError::Unexpected(
@@ -438,12 +443,12 @@ async fn start_request(chat: &ChatConnection, (request, mut responder): Incoming
 
 #[cfg(test)]
 mod test {
-    use std::sync::atomic::AtomicUsize;
     use std::sync::LazyLock;
+    use std::sync::atomic::AtomicUsize;
 
     use assert_matches::assert_matches;
-    use http::uri::PathAndQuery;
     use http::HeaderMap;
+    use http::uri::PathAndQuery;
     use test_case::test_case;
     use tokio::sync::oneshot;
     use tokio::time::Instant;

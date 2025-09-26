@@ -29,6 +29,7 @@ impl Gossip {
         }
     }
 
+    #[cfg(test)]
     pub fn minimal_test_data() -> Self {
         Self {
             tree_size: 0,

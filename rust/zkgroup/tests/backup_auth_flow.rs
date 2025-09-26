@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use zkgroup::{RandomnessBytes, Timestamp, RANDOMNESS_LEN};
+use zkgroup::{RANDOMNESS_LEN, RandomnessBytes, Timestamp};
 
 const DAY_ALIGNED_TIMESTAMP: Timestamp = Timestamp::from_epoch_seconds(1681344000); // 2023-04-13 00:00:00 UTC
 
@@ -13,7 +13,7 @@ fn test_backup_auth_request_response() {
     let randomness2: RandomnessBytes = [0x44u8; RANDOMNESS_LEN];
     let randomness3: RandomnessBytes = [0x45u8; RANDOMNESS_LEN];
 
-    // client derives this from the their master key
+    // client derives this from the their account entropy pool.
     // The type annotation is not redundant; it indicates we are using the latest version of the
     // backup key struct.
     let backup_key: libsignal_account_keys::BackupKey =

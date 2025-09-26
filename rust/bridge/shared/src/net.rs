@@ -5,11 +5,10 @@
 
 use std::num::NonZeroU16;
 
-use base64::prelude::{Engine, BASE64_STANDARD};
 use libsignal_bridge_macros::bridge_fn;
 pub use libsignal_bridge_types::net::{ConnectionManager, Environment, TokioAsyncContext};
-use libsignal_net::auth::Auth;
 use libsignal_net::chat::ConnectionInfo;
+use libsignal_net::connect_state::infer_proxy_mode_for_config;
 use libsignal_net::infra::errors::LogSafeDisplay;
 use libsignal_net::infra::route::ConnectionProxyConfig;
 
@@ -20,6 +19,7 @@ pub(crate) mod cdsi;
 pub(crate) mod chat;
 mod keytrans;
 mod registration;
+mod svrb;
 mod tokio;
 
 bridge_handle_fns!(ConnectionInfo, clone = false, jni = false);
@@ -107,7 +107,7 @@ fn ConnectionManager_set_proxy(
     connection_manager: &ConnectionManager,
     proxy: &ConnectionProxyConfig,
 ) {
-    connection_manager.set_proxy(proxy.clone())
+    connection_manager.set_proxy_mode(infer_proxy_mode_for_config(proxy.clone()))
 }
 
 #[bridge_fn]
@@ -117,7 +117,7 @@ fn ConnectionManager_set_invalid_proxy(connection_manager: &ConnectionManager) {
 
 #[bridge_fn]
 fn ConnectionManager_clear_proxy(connection_manager: &ConnectionManager) {
-    connection_manager.clear_proxy();
+    connection_manager.set_proxy_mode(libsignal_net::infra::route::DirectOrProxyMode::DirectOnly);
 }
 
 #[bridge_fn(jni = false, ffi = false)]
@@ -144,17 +144,6 @@ fn ConnectionManager_set_remote_config(
 #[bridge_fn]
 fn ConnectionManager_on_network_change(connection_manager: &ConnectionManager) {
     connection_manager.on_network_change(std::time::Instant::now())
-}
-
-#[bridge_fn]
-fn CreateOTP(username: String, secret: &[u8]) -> String {
-    Auth::otp(&username, secret, std::time::SystemTime::now())
-}
-
-#[bridge_fn]
-fn CreateOTPFromBase64(username: String, secret: String) -> String {
-    let secret = BASE64_STANDARD.decode(secret).expect("valid base64");
-    Auth::otp(&username, &secret, std::time::SystemTime::now())
 }
 
 #[cfg(any(feature = "node", feature = "jni", feature = "ffi"))]

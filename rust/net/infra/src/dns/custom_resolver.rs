@@ -10,7 +10,7 @@ use std::future::Future;
 use std::hash::Hash;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use either::Either;
 use futures_util::{FutureExt as _, Stream, StreamExt as _};
@@ -26,12 +26,12 @@ use crate::route::{
     ConnectionOutcomeParams, ConnectionOutcomes, ConnectorFactory, InterfaceMonitor, ResolvedRoute,
 };
 use crate::timeouts::{
-    DNS_CALL_BACKGROUND_TIMEOUT, DNS_RESOLUTION_DELAY, NETWORK_INTERFACE_POLL_INTERVAL,
+    DNS_CALL_BACKGROUND_TIMEOUT, NETWORK_INTERFACE_POLL_INTERVAL,
     POST_ROUTE_CHANGE_CONNECTION_TIMEOUT,
 };
-use crate::utils::future::results_within_interval;
 use crate::utils::NetworkChangeEvent;
-use crate::{dns, DnsSource};
+use crate::utils::future::results_within_interval;
+use crate::{DnsSource, dns};
 
 pub type DnsIpv4Result = Expiring<Vec<Ipv4Addr>>;
 pub type DnsIpv6Result = Expiring<Vec<Ipv6Addr>>;
@@ -86,7 +86,8 @@ impl<K, V> Default for SharedCacheWithGenerations<K, V> {
 }
 
 const DNS_CONNECTION_COOLDOWN_CONFIG: ConnectionOutcomeParams = ConnectionOutcomeParams {
-    age_cutoff: Duration::from_secs(5 * 60),
+    short_term_age_cutoff: Duration::from_secs(5 * 60),
+    long_term_age_cutoff: Duration::from_secs(5 * 60),
     cooldown_growth_factor: 10.0,
     max_count: 5,
     max_delay: Duration::from_secs(30),
@@ -103,6 +104,8 @@ pub struct CustomDnsResolver<R, T> {
     network_change_event: NetworkChangeEvent,
     attempts_record: Arc<tokio::sync::RwLock<ConnectionOutcomes<R>>>,
     cache: Arc<std::sync::Mutex<SharedCacheWithGenerations<String, Expiring<LookupResult>>>>,
+    /// How long to wait for a second response after the first one is received.
+    second_response_grace_period: Duration,
 }
 
 impl<R, T> CustomDnsResolver<R, T>
@@ -114,6 +117,7 @@ where
         routes: Vec<R>,
         connector_factory: T,
         network_change_event: &NetworkChangeEvent,
+        second_response_grace_period: Duration,
     ) -> Self {
         let cache = Arc::new(std::sync::Mutex::new(SharedCacheWithGenerations::default()));
         let attempts_record = Arc::new(tokio::sync::RwLock::new(ConnectionOutcomes::new(
@@ -126,6 +130,7 @@ where
             network_change_event: network_change_event.clone(),
             attempts_record,
             cache,
+            second_response_grace_period,
         }
     }
 
@@ -185,14 +190,15 @@ where
             &mut attempts_record_snapshot,
             connector,
             (),
-            "dns".into(),
+            "dns",
             |_e| std::ops::ControlFlow::Continue::<std::convert::Infallible>(()),
         )
         .await;
-        self.attempts_record
-            .write()
-            .await
-            .apply_outcome_updates(updates.outcomes, updates.finished_at);
+        self.attempts_record.write().await.apply_outcome_updates(
+            updates.outcomes,
+            updates.finished_at,
+            SystemTime::now(),
+        );
         let transport = result.map_err(|e| match e {
             crate::route::ConnectError::NoResolvedRoutes => dns::DnsError::TransportRestricted,
             crate::route::ConnectError::AllAttemptsFailed
@@ -203,7 +209,7 @@ where
         let (maybe_ipv4, maybe_ipv6) = results_within_interval(
             ipv4_res_rx.map(Result::ok),
             ipv6_res_rx.map(Result::ok),
-            DNS_RESOLUTION_DELAY,
+            self.second_response_grace_period,
         )
         .await;
         let ipv4s = maybe_ipv4.map_or(vec![], |r| r.data);
@@ -285,7 +291,7 @@ async fn do_lookup_task_body<T: DnsTransport>(
     let stream = match transport.send_queries(request.clone()).await {
         Ok(stream) => stream,
         Err(err) => {
-            log::error!(
+            log::warn!(
                 "While resolving [{}] failed to send queries over [{}]: {}",
                 log_safe_domain(&request.hostname),
                 T::SOURCE,
@@ -380,8 +386,8 @@ pub(crate) mod test {
     use std::iter;
     use std::net::IpAddr;
     use std::pin::pin;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use assert_matches::assert_matches;
     use const_str::ip_addr;
@@ -389,10 +395,10 @@ pub(crate) mod test {
     use test_case::test_case;
 
     use super::*;
-    use crate::route::testutils::ConnectFn;
     use crate::route::Connector;
-    use crate::testutil::no_network_change_events;
-    use crate::utils::{sleep_and_catch_up, sleep_until_and_catch_up};
+    use crate::route::testutils::ConnectFn;
+    use crate::timeouts::DNS_LATER_RESPONSE_GRACE_PERIOD;
+    use crate::utils::{no_network_change_events, sleep_and_catch_up, sleep_until_and_catch_up};
 
     // Remove this when Rust figures out how to make arbitrary Div impls const.
     const fn div_duration(input: Duration, divisor: u32) -> Duration {
@@ -435,7 +441,7 @@ pub(crate) mod test {
             &self,
             _over: (),
             _route: IpAddr,
-            _log_tag: Arc<str>,
+            _log_tag: &str,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
             std::future::ready(Err(self.0.clone()))
         }
@@ -485,7 +491,7 @@ pub(crate) mod test {
             &self,
             _over: (),
             _route: IpAddr,
-            _log_tag: Arc<str>,
+            _log_tag: &str,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
             std::future::ready(Ok(self.clone()))
         }
@@ -508,6 +514,7 @@ pub(crate) mod test {
                     queries_count: Default::default(),
                 }),
                 &no_network_change_events(),
+                DNS_LATER_RESPONSE_GRACE_PERIOD,
             )
         }
 
@@ -531,6 +538,7 @@ pub(crate) mod test {
                 vec![DNS_SERVER_IP],
                 MakeConnectorByCloning(transport.clone()),
                 &no_network_change_events(),
+                DNS_LATER_RESPONSE_GRACE_PERIOD,
             );
             (transport, resolver)
         }
@@ -626,7 +634,7 @@ pub(crate) mod test {
         let (transport, resolver) =
             TestDnsTransportWithTwoResponses::transport_and_custom_dns_resolver(|_, q_num, txs| {
                 let first = DNS_CALL_BACKGROUND_TIMEOUT / 4;
-                let second = first + DNS_RESOLUTION_DELAY / 2;
+                let second = first + DNS_LATER_RESPONSE_GRACE_PERIOD / 2;
                 let (timeout_1, timeout_2) = if q_num == 1 {
                     (first, second)
                 } else {
@@ -649,7 +657,7 @@ pub(crate) mod test {
     async fn works_correctly_when_second_response_is_after_resolution_delay() {
         let resolver = TestDnsTransportWithTwoResponses::custom_dns_resolver(|_, q_num, txs| {
             let first = DNS_CALL_BACKGROUND_TIMEOUT / 4;
-            let second = first + DNS_RESOLUTION_DELAY * 2;
+            let second = first + DNS_LATER_RESPONSE_GRACE_PERIOD * 2;
             let (timeout_1, timeout_2) = if q_num == 1 {
                 (first, second)
             } else {
@@ -686,8 +694,8 @@ pub(crate) mod test {
             let res_2 = ok_query_result_ipv6(Duration::ZERO, IP_V6_LIST_1);
             let res_3 = Err(Error::NoData);
             let timeout_1 = DNS_CALL_BACKGROUND_TIMEOUT / 4;
-            let timeout_2 = timeout_1 + DNS_RESOLUTION_DELAY / 3;
-            let timeout_3 = timeout_1 + DNS_RESOLUTION_DELAY / 2;
+            let timeout_2 = timeout_1 + DNS_LATER_RESPONSE_GRACE_PERIOD / 3;
+            let timeout_3 = timeout_1 + DNS_LATER_RESPONSE_GRACE_PERIOD / 2;
             respond_after_timeout(timeout_1, tx_1, res_1);
             respond_after_timeout(timeout_2, tx_2, res_2);
             respond_after_timeout(timeout_3, tx_3, res_3);
@@ -699,7 +707,7 @@ pub(crate) mod test {
     #[tokio::test(start_paused = true)]
     async fn returns_second_result_if_first_result_fails() {
         let resolver = TestDnsTransportWithTwoResponses::custom_dns_resolver(|_, _, txs| {
-            let timeout_2 = DNS_RESOLUTION_DELAY * 2;
+            let timeout_2 = DNS_LATER_RESPONSE_GRACE_PERIOD * 2;
             let [tx_1, tx_2] = txs;
             let res_1 = Err(Error::LookupFailed);
             let res_2 = ok_query_result_ipv6(Duration::ZERO, IP_V6_LIST_1);
@@ -822,6 +830,7 @@ pub(crate) mod test {
                 std::io::ErrorKind::BrokenPipe,
             ))),
             &no_network_change_events(),
+            DNS_LATER_RESPONSE_GRACE_PERIOD,
         );
         let result = resolver.resolve(test_request()).await;
         assert_matches!(result, Err(Error::TransportFailure));
@@ -844,13 +853,14 @@ pub(crate) mod test {
         let routes_tried = Arc::new(Mutex::new(HashSet::new()));
         let resolver = CustomDnsResolver::new(
             ips.to_vec(),
-            ConnectFn(|_over, route: IpAddr, _log_tag| {
+            ConnectFn(|_over, route: IpAddr| {
                 routes_tried.lock().expect("not poisoned").insert(route);
                 std::future::ready(Err::<TestDnsTransportFailingToConnect, _>(Error::Io(
                     std::io::ErrorKind::BrokenPipe,
                 )))
             }),
             &no_network_change_events(),
+            DNS_LATER_RESPONSE_GRACE_PERIOD,
         );
         let result = resolver
             .resolve(DnsLookupRequest {
@@ -875,7 +885,7 @@ pub(crate) mod test {
         let ips = [ip_addr!("3fff::100"), DNS_SERVER_IP];
         let resolver = CustomDnsResolver::new(
             ips.to_vec(),
-            ConnectFn(|_over, route: IpAddr, _log_tag| {
+            ConnectFn(|_over, route: IpAddr| {
                 *attempts_by_ip
                     .lock()
                     .expect("no panic")
@@ -898,6 +908,7 @@ pub(crate) mod test {
                 std::future::ready(result)
             }),
             &no_network_change_events(),
+            DNS_LATER_RESPONSE_GRACE_PERIOD,
         );
         let result = resolver.resolve(test_request()).await;
         assert_lookup_result_content_equal(&result.unwrap(), IP_V4_LIST_1, IP_V6_LIST_1);

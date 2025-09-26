@@ -6,10 +6,10 @@
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use libsignal_bridge_macros::*;
+use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::net::chat::{
     AuthenticatedChatConnection, ChatListener, HttpRequest, UnauthenticatedChatConnection,
 };
-use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_net::chat::fake::FakeChatRemote;
 use libsignal_net::chat::{
     ConnectError, RequestProto, Response as ChatResponse, ResponseProto, SendError,
@@ -334,7 +334,7 @@ fn TESTING_ChatSendErrorConvert(
         TestingChatSendError::ConnectionInvalidated => SendError::ConnectionInvalidated,
         TestingChatSendError::ConnectedElsewhere => SendError::ConnectedElsewhere,
         TestingChatSendError::WebSocketConnectionReset => {
-            SendError::WebSocket(libsignal_net::infra::ws::WebSocketServiceError::Io(
+            SendError::WebSocket(libsignal_net::infra::ws::WebSocketError::Io(
                 std::io::ErrorKind::ConnectionReset.into(),
             ))
         }

@@ -5,24 +5,24 @@
 
 import * as uuid from 'uuid';
 
-import * as Errors from './Errors';
-export * from './Errors';
+import * as Errors from './Errors.js';
+export * from './Errors.js';
 
-import { Aci, ProtocolAddress, ServiceId } from './Address';
-export * from './Address';
-import { PrivateKey, PublicKey } from './EcKeys';
-export * from './EcKeys';
+import { Aci, ProtocolAddress, ServiceId } from './Address.js';
+export * from './Address.js';
+import { PrivateKey, PublicKey } from './EcKeys.js';
+export * from './EcKeys.js';
 
-export * as usernames from './usernames';
+export * as usernames from './usernames.js';
 
-export * as io from './io';
+export * as io from './io.js';
 
-export * as Net from './net';
+export * as Net from './net.js';
 
-export * as Mp4Sanitizer from './Mp4Sanitizer';
-export * as WebpSanitizer from './WebpSanitizer';
+export * as Mp4Sanitizer from './Mp4Sanitizer.js';
+export * as WebpSanitizer from './WebpSanitizer.js';
 
-import * as Native from '../Native';
+import Native from '../Native.js';
 
 Native.registerErrors(Errors);
 
@@ -237,16 +237,16 @@ export class KEMKeyPair {
 
 /** The public information contained in a {@link SignedPreKeyRecord} */
 export type SignedPublicPreKey = {
-  id(): number;
-  publicKey(): PublicKey;
-  signature(): Uint8Array;
+  id: () => number;
+  publicKey: () => PublicKey;
+  signature: () => Uint8Array;
 };
 
 /** The public information contained in a {@link KyberPreKeyRecord} */
 export type SignedKyberPublicPreKey = {
-  id(): number;
-  publicKey(): KEMPublicKey;
-  signature(): Uint8Array;
+  id: () => number;
+  publicKey: () => KEMPublicKey;
+  signature: () => Uint8Array;
 };
 
 export class PreKeyBundle {
@@ -823,8 +823,26 @@ export class SenderCertificate {
   signature(): Uint8Array {
     return Native.SenderCertificate_GetSignature(this);
   }
+
+  /**
+   * Validates `this` against the given trust root at the given current time.
+   *
+   * @see validateWithTrustRoots
+   */
   validate(trustRoot: PublicKey, time: number): boolean {
-    return Native.SenderCertificate_Validate(this, trustRoot, time);
+    return Native.SenderCertificate_Validate(this, [trustRoot], time);
+  }
+
+  /**
+   * Validates `this` against the given trust roots at the given current time.
+   *
+   * Checks the certificate against each key in `trustRoots` in constant time (that is, no result
+   * is produced until every key is checked), making sure **one** of them has signed its embedded
+   * server certificate. The `time` parameter is compared numerically against ``expiration``, and
+   * is not required to use any specific units, but Signal uses milliseconds since 1970.
+   */
+  validateWithTrustRoots(trustRoots: PublicKey[], time: number): boolean {
+    return Native.SenderCertificate_Validate(this, trustRoots, time);
   }
 }
 
@@ -1172,8 +1190,16 @@ export abstract class KyberPreKeyStore implements Native.KyberPreKeyStore {
     return prekey._nativeHandle;
   }
 
-  async _markKyberPreKeyUsed(kyberPreKeyId: number): Promise<void> {
-    return this.markKyberPreKeyUsed(kyberPreKeyId);
+  async _markKyberPreKeyUsed(
+    kyberPreKeyId: number,
+    signedPreKeyId: number,
+    baseKey: Native.PublicKey
+  ): Promise<void> {
+    return this.markKyberPreKeyUsed(
+      kyberPreKeyId,
+      signedPreKeyId,
+      PublicKey._fromNativeHandle(baseKey)
+    );
   }
 
   abstract saveKyberPreKey(
@@ -1181,7 +1207,11 @@ export abstract class KyberPreKeyStore implements Native.KyberPreKeyStore {
     record: KyberPreKeyRecord
   ): Promise<void>;
   abstract getKyberPreKey(kyberPreKeyId: number): Promise<KyberPreKeyRecord>;
-  abstract markKyberPreKeyUsed(kyberPreKeyId: number): Promise<void>;
+  abstract markKyberPreKeyUsed(
+    kyberPreKeyId: number,
+    signedPreKeyId: number,
+    baseKey: PublicKey
+  ): Promise<void>;
 }
 
 export abstract class SenderKeyStore implements Native.SenderKeyStore {
@@ -1290,7 +1320,7 @@ export class SealedSenderDecryptionResult {
 }
 
 export interface CiphertextMessageConvertible {
-  asCiphertextMessage(): CiphertextMessage;
+  asCiphertextMessage: () => CiphertextMessage;
 }
 
 export class CiphertextMessage {

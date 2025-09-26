@@ -21,15 +21,16 @@ use libsignal_net_infra::route::{
     HttpsProvider, TlsRouteProvider,
 };
 use libsignal_net_infra::{
-    AsStaticHttpHeader, ConnectionParams, EnableDomainFronting, EnforceMinimumTls, RouteType,
-    TransportConnectionParams,
+    AsStaticHttpHeader, ConnectionParams, EnableDomainFronting, EnforceMinimumTls,
+    RECOMMENDED_WS_CONFIG, RouteType, TransportConnectionParams,
 };
 use nonzero_ext::nonzero;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 use crate::certs::{PROXY_G_ROOT_CERTIFICATES, SIGNAL_ROOT_CERTIFICATES};
-use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, Svr2};
+use crate::chat::RECOMMENDED_CHAT_WS_CONFIG;
+use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, SvrSgx};
 
 const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443_u16);
 pub const TIMESTAMP_HEADER_NAME: &str = "x-signal-timestamp";
@@ -145,6 +146,38 @@ const DOMAIN_CONFIG_SVR2_STAGING: DomainConfig = DomainConfig {
     ip_v6: &[],
 };
 
+const DOMAIN_CONFIG_SVRB_STAGING: DomainConfig = DomainConfig {
+    connect: ConnectionConfig {
+        hostname: "svrb.staging.signal.org",
+        port: DEFAULT_HTTPS_PORT,
+        cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
+        confirmation_header_name: None,
+        proxy: Some(ConnectionProxyConfig {
+            path_prefix: "/svrb-staging",
+            configs: [PROXY_CONFIG_F_STAGING, PROXY_CONFIG_G],
+        }),
+    },
+    ip_v4: &[ip_addr!(v4, "20.66.46.240")],
+    ip_v6: &[],
+};
+
+const DOMAIN_CONFIG_SVRB_PROD: DomainConfig = DomainConfig {
+    connect: ConnectionConfig {
+        hostname: "svrb.signal.org",
+        port: DEFAULT_HTTPS_PORT,
+        cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
+        confirmation_header_name: None,
+        proxy: Some(ConnectionProxyConfig {
+            path_prefix: "/svrb",
+            configs: [PROXY_CONFIG_F_STAGING, PROXY_CONFIG_G],
+        }),
+    },
+    ip_v4: &[ip_addr!(v4, "20.114.45.6")],
+    ip_v6: &[],
+};
+
 pub const PROXY_CONFIG_F_PROD: ProxyConfig = ProxyConfig {
     route_type: RouteType::ProxyF,
     http_host: "reflector-signal.global.ssl.fastly.net",
@@ -181,27 +214,34 @@ pub const PROXY_CONFIG_G: ProxyConfig = ProxyConfig {
 };
 
 pub(crate) const ENDPOINT_PARAMS_CDSI_STAGING: EndpointParams<'static, Cdsi> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI),
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_STAGING),
     raft_config: (),
 };
 
-pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, Svr2> = EndpointParams {
+pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, SvrSgx> = EndpointParams {
     mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_STAGING),
     raft_config: attest::constants::RAFT_CONFIG_SVR2_STAGING,
 };
 
+pub(crate) const ENDPOINT_PARAMS_SVRB_STAGING: EndpointParams<'static, SvrSgx> = EndpointParams {
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_STAGING),
+    raft_config: attest::constants::RAFT_CONFIG_SVRB_STAGING,
+};
+
+pub(crate) const ENDPOINT_PARAMS_SVRB_PROD: EndpointParams<'static, SvrSgx> = EndpointParams {
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_PROD),
+    raft_config: attest::constants::RAFT_CONFIG_SVRB_PROD,
+};
+
 pub(crate) const ENDPOINT_PARAMS_CDSI_PROD: EndpointParams<'static, Cdsi> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI),
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_PROD),
     raft_config: (),
 };
 
-// Currently, the production SVR2 is prequantum while we're testing the postquantum
-// handshakes in staging.
-pub(crate) const ENDPOINT_PARAMS_SVR2_PROD_PREQUANTUM: EndpointParams<'static, Svr2> =
-    EndpointParams {
-        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_PROD_PREQUANTUM),
-        raft_config: attest::constants::RAFT_CONFIG_SVR2_PROD_PREQUANTUM,
-    };
+pub(crate) const ENDPOINT_PARAMS_SVR2_PROD: EndpointParams<'static, SvrSgx> = EndpointParams {
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_PROD),
+    raft_config: attest::constants::RAFT_CONFIG_SVR2_PROD,
+};
 
 pub(crate) const KEYTRANS_SIGNING_KEY_MATERIAL_STAGING: &[u8; 32] =
     &hex!("ac0de1fd7f33552bbeb6ebc12b9d4ea10bf5f025c45073d3fb5f5648955a749e");
@@ -439,12 +479,15 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn shuffled_connection_params(
+    pub fn shuffled_connection_params<R>(
         &self,
         proxy_path: &'static str,
         confirmation_header_name: Option<&'static str>,
-        rng: &mut impl Rng,
-    ) -> impl Iterator<Item = ConnectionParams> {
+        rng: &mut R,
+    ) -> impl Iterator<Item = ConnectionParams> + use<R>
+    where
+        R: Rng,
+    {
         let route_type = self.route_type;
         let http_host = Arc::from(self.http_host);
         let certs = self.certs.clone();
@@ -505,10 +548,47 @@ impl From<KeyTransConfig> for PublicConfig {
     }
 }
 
+const SVRB_ENV_MAX_PREVIOUS: usize = 3;
+
+pub struct SvrBEnv<'a> {
+    current: EnclaveEndpoint<'a, SvrSgx>,
+    // There may be differing numbers of previous endpoints in staging vs prod,
+    // so rather than store a fixed-sized array of previous, we store
+    // a max-sized list of Options, which are often None but can be set.
+    // Thus, if staging has 2 and prod has 1, they can set [foo, bar, None] and
+    // [baz, None, None] respectively.
+    previous: [Option<EnclaveEndpoint<'a, SvrSgx>>; SVRB_ENV_MAX_PREVIOUS],
+}
+
+impl<'a> SvrBEnv<'a> {
+    pub const fn new(
+        current: EnclaveEndpoint<'a, SvrSgx>,
+        previous: [Option<EnclaveEndpoint<'a, SvrSgx>>; SVRB_ENV_MAX_PREVIOUS],
+    ) -> Self {
+        Self { current, previous }
+    }
+
+    pub const fn current(&self) -> &EnclaveEndpoint<'a, SvrSgx> {
+        &self.current
+    }
+
+    pub fn previous(&self) -> impl std::iter::Iterator<Item = &EnclaveEndpoint<'a, SvrSgx>> {
+        self.previous.iter().filter_map(|a| a.as_ref())
+    }
+
+    pub fn current_and_previous(
+        &self,
+    ) -> impl std::iter::Iterator<Item = &EnclaveEndpoint<'a, SvrSgx>> {
+        std::iter::once(&self.current).chain(self.previous.iter().filter_map(|a| a.as_ref()))
+    }
+}
+
 pub struct Env<'a> {
     pub cdsi: EnclaveEndpoint<'a, Cdsi>,
-    pub svr2: EnclaveEndpoint<'a, Svr2>,
+    pub svr2: EnclaveEndpoint<'a, SvrSgx>,
+    pub svr_b: SvrBEnv<'a>,
     pub chat_domain_config: DomainConfig,
+    pub chat_ws_config: crate::chat::ws::Config,
     pub keytrans_config: KeyTransConfig,
 }
 
@@ -519,40 +599,71 @@ impl<'a> Env<'a> {
             cdsi,
             svr2,
             chat_domain_config,
-            ..
+            svr_b,
+            chat_ws_config: _,
+            keytrans_config: _,
         } = self;
-        HashMap::from([
-            cdsi.domain_config.static_fallback(),
-            svr2.domain_config.static_fallback(),
-            chat_domain_config.static_fallback(),
-        ])
+
+        let svrb_static_fallbacks = svr_b
+            .current_and_previous()
+            .map(|enclave_endpoint| enclave_endpoint.domain_config.static_fallback());
+
+        HashMap::from_iter(
+            [
+                cdsi.domain_config.static_fallback(),
+                svr2.domain_config.static_fallback(),
+                chat_domain_config.static_fallback(),
+            ]
+            .into_iter()
+            .chain(svrb_static_fallbacks),
+        )
     }
 }
 
 pub const STAGING: Env<'static> = Env {
     chat_domain_config: DOMAIN_CONFIG_CHAT_STAGING,
+    chat_ws_config: RECOMMENDED_CHAT_WS_CONFIG,
     cdsi: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_CDSI_STAGING,
+        ws_config: RECOMMENDED_WS_CONFIG,
         params: ENDPOINT_PARAMS_CDSI_STAGING,
     },
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2_STAGING,
+        ws_config: RECOMMENDED_WS_CONFIG,
         params: ENDPOINT_PARAMS_SVR2_STAGING,
+    },
+    svr_b: SvrBEnv {
+        current: EnclaveEndpoint {
+            domain_config: DOMAIN_CONFIG_SVRB_STAGING,
+            ws_config: RECOMMENDED_WS_CONFIG,
+            params: ENDPOINT_PARAMS_SVRB_STAGING,
+        },
+        previous: [None, None, None],
     },
     keytrans_config: KEYTRANS_CONFIG_STAGING,
 };
 
 pub const PROD: Env<'static> = Env {
     chat_domain_config: DOMAIN_CONFIG_CHAT,
+    chat_ws_config: RECOMMENDED_CHAT_WS_CONFIG,
     cdsi: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_CDSI,
+        ws_config: RECOMMENDED_WS_CONFIG,
         params: ENDPOINT_PARAMS_CDSI_PROD,
     },
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2,
-        // Currently, the production SVR2 is prequantum while we're testing the postquantum
-        // handshakes in staging.
-        params: ENDPOINT_PARAMS_SVR2_PROD_PREQUANTUM,
+        ws_config: RECOMMENDED_WS_CONFIG,
+        params: ENDPOINT_PARAMS_SVR2_PROD,
+    },
+    svr_b: SvrBEnv {
+        current: EnclaveEndpoint {
+            domain_config: DOMAIN_CONFIG_SVRB_PROD,
+            ws_config: RECOMMENDED_WS_CONFIG,
+            params: ENDPOINT_PARAMS_SVRB_PROD,
+        },
+        previous: [None, None, None],
     },
     keytrans_config: KEYTRANS_CONFIG_PROD,
 };
@@ -564,8 +675,10 @@ pub mod constants {
 #[cfg(test)]
 mod test {
     use std::collections::HashSet;
+    use std::time::Duration;
 
     use itertools::Itertools as _;
+    use libsignal_net_infra::Alpn;
     use libsignal_net_infra::dns::build_custom_resolver_cloudflare_doh;
     use libsignal_net_infra::dns::dns_lookup::DnsLookupRequest;
     use libsignal_net_infra::route::testutils::FakeContext;
@@ -573,8 +686,7 @@ mod test {
         HttpRouteFragment, HttpsTlsRoute, RouteProvider as _, TcpRoute, TlsRoute, TlsRouteFragment,
         UnresolvedHost,
     };
-    use libsignal_net_infra::testutil::no_network_change_events;
-    use libsignal_net_infra::Alpn;
+    use libsignal_net_infra::utils::no_network_change_events;
     use test_case::test_matrix;
 
     use super::*;
@@ -700,7 +812,13 @@ mod test {
         // The point of this test isn't to test the resolver, but to use it to test something else.
         // So, I directly access the raw CustomDnsResolver::resolve method.
         // Other usages should use the higher level DnsResolver::lookup instead.
-        let resolver = build_custom_resolver_cloudflare_doh(&no_network_change_events());
+        let resolver = build_custom_resolver_cloudflare_doh(
+            &no_network_change_events(),
+            // We want to check responses for IPv4 and IPv6 so don't time out if
+            // one of them takes too long. We'll still be subject to the overall
+            // lookup timeout regardless.
+            Duration::MAX,
+        );
 
         let (hostname, static_hardcoded_ips) = config.static_fallback();
 

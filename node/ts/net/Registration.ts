@@ -5,13 +5,13 @@
 
 import type { ReadonlyDeep } from 'type-fest';
 
-import * as Native from '../../Native';
-import { LibSignalError, RateLimitedError } from '../Errors';
-import { type Net, type TokioAsyncContext } from '../net';
-import { PublicKey } from '../EcKeys';
-import { Aci, Pni, ServiceIdKind } from '../Address';
-import { SignedKyberPublicPreKey, SignedPublicPreKey } from '..';
-import { newNativeHandle } from '../internal';
+import Native from '../../Native.js';
+import { LibSignalError, RateLimitedError } from '../Errors.js';
+import { type Net, type TokioAsyncContext } from '../net.js';
+import { PublicKey } from '../EcKeys.js';
+import { Aci, Pni, ServiceIdKind } from '../Address.js';
+import { SignedKyberPublicPreKey, SignedPublicPreKey } from '../index.js';
+import { newNativeHandle } from '../internal.js';
 
 type ConnectionManager = Native.Wrapper<Native.ConnectionManager>;
 
@@ -137,6 +137,16 @@ export class RegistrationService {
     return this.sessionState;
   }
 
+  /**
+   * Request that a verification code be sent via the given transport method.
+   *
+   * With the websocket transport, this makes a POST request to
+   * `/v1/verification/session/{sessionId}/code`.
+   *
+   * The `languages` parameter should be a list of languages in Accept-Language syntax. Note that
+   * "quality weighting" can be left out; the Signal server will always consider the list to be in
+   * priority order.
+   */
   public async requestVerification({
     transport,
     client,

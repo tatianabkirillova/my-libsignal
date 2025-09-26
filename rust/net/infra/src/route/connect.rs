@@ -5,15 +5,14 @@
 
 use std::future::Future;
 use std::net::IpAddr;
-use std::sync::Arc;
 
 use static_assertions::assert_impl_all;
 
 use crate::errors::TransportConnectError;
 use crate::route::{
-    ConnectionProxyRoute, DirectOrProxyRoute, HttpRouteFragment, HttpsTlsRoute, TcpRoute, TlsRoute,
-    TlsRouteFragment, TransportRoute, WebSocketRoute, WebSocketRouteFragment,
-    WebSocketServiceRoute,
+    ConnectionProxyRoute, DirectOrProxyRoute, HttpRouteFragment, HttpsTlsRoute, NoiseRoute,
+    NoiseRouteFragment, TcpRoute, TlsRoute, TlsRouteFragment, TransportRoute, WebSocketRoute,
+    WebSocketRouteFragment, WebSocketServiceRoute,
 };
 use crate::ws::WebSocketConnectError;
 
@@ -55,7 +54,7 @@ pub trait Connector<R, Inner> {
         &self,
         over: Inner,
         route: R,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send;
 }
 
@@ -64,7 +63,7 @@ pub trait ConnectorExt<R>: Connector<R, ()> {
     fn connect(
         &self,
         route: R,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         self.connect_over((), route, log_tag)
     }
@@ -137,7 +136,7 @@ where
         &self,
         over: Inner,
         route: WebSocketRoute<HttpsTlsRoute<T>>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let WebSocketRoute {
             fragment: ws_fragment,
@@ -168,7 +167,7 @@ where
         &self,
         over: Inner,
         route: TlsRoute<T>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let TlsRoute {
             fragment: tls_fragment,
@@ -196,13 +195,40 @@ where
         &self,
         over: Inner,
         route: TlsRoute<T>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let TlsRoute {
             fragment: tls_fragment,
             inner: tcp_route,
         } = route;
         self.connect_inner_then_outer_with_timeout(over, tcp_route, tls_fragment, log_tag)
+    }
+}
+
+/// Establishes a Noise connection over an unproxied transport stream.
+impl<A, B, Inner, T, Error, N> Connector<NoiseRoute<N, T>, Inner> for ComposedConnector<A, B, Error>
+where
+    A: Connector<NoiseRouteFragment<N>, B::Connection, Error: Into<Error>> + Sync,
+    B: Connector<T, Inner, Error: Into<Error>> + Sync,
+    Inner: Send,
+    T: Send,
+    N: Send,
+{
+    type Connection = A::Connection;
+
+    type Error = Error;
+
+    fn connect_over(
+        &self,
+        over: Inner,
+        route: NoiseRoute<N, T>,
+        log_tag: &str,
+    ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
+        let NoiseRoute {
+            fragment,
+            inner: tcp_route,
+        } = route;
+        self.connect_inner_then_outer(over, tcp_route, fragment, log_tag)
     }
 }
 
@@ -215,7 +241,7 @@ impl<C: Connector<R, Inner>, R, Inner> Connector<R, Inner> for &C {
         &self,
         over: Inner,
         route: R,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         (*self).connect_over(over, route, log_tag)
     }
@@ -236,7 +262,7 @@ pub mod testutils {
 
     impl<R, Inner, Fut, F, C, E> Connector<R, Inner> for ConnectFn<F>
     where
-        F: Fn(Inner, R, Arc<str>) -> Fut,
+        F: for<'a> Fn(Inner, R) -> Fut,
         Fut: Future<Output = Result<C, E>> + Send,
     {
         type Connection = C;
@@ -247,9 +273,9 @@ pub mod testutils {
             &self,
             over: Inner,
             route: R,
-            log_tag: Arc<str>,
+            _log_tag: &str,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
-            self.0(over, route, log_tag)
+            self.0(over, route)
         }
     }
 
@@ -284,7 +310,7 @@ pub mod testutils {
             &self,
             _transport: T,
             _route: R,
-            _log_tag: Arc<str>,
+            _log_tag: &str,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
             let delay = self.delay;
             async move {

@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use libsignal_core::{Aci, Pni, ServiceIdKind};
 use libsignal_net::auth::Auth;
+use libsignal_net::chat::LanguageList;
 use libsignal_protocol::{GenericSignedPreKey, PublicKey};
 use serde_with::{
-    serde_as, skip_serializing_none, DurationMilliSeconds, DurationSeconds, FromInto,
+    DurationMilliSeconds, DurationSeconds, FromInto, serde_as, skip_serializing_none,
 };
 use uuid::Uuid;
 
@@ -54,9 +55,10 @@ pub(crate) trait RegistrationChatApi {
         session_id: &SessionId,
         transport: VerificationTransport,
         client: &str,
-        languages: &[String],
-    ) -> impl Future<Output = Result<RegistrationResponse, Self::Error<RequestVerificationCodeError>>>
-           + Send;
+        languages: LanguageList,
+    ) -> impl Future<
+        Output = Result<RegistrationResponse, Self::Error<RequestVerificationCodeError>>,
+    > + Send;
 
     fn submit_push_challenge(
         &self,

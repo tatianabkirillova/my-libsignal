@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import * as Native from '../Native';
-import * as stream from 'stream';
-import { LibSignalErrorBase } from './Errors';
+import Native from '../Native.js';
+import * as stream from 'node:stream';
+import {
+  IncrementalMacVerificationFailed,
+  LibSignalErrorBase,
+} from './Errors.js';
 
 type CallbackType = (error?: Error | null) => void;
 
@@ -41,7 +44,7 @@ class DigestingWritable extends stream.Writable {
   }
 
   _write(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/explicit-module-boundary-types
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     chunk: any,
     encoding: BufferEncoding,
     callback: CallbackType
@@ -131,7 +134,7 @@ class ValidatingWritable extends stream.Writable {
   }
 
   _write(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/explicit-module-boundary-types
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     chunk: any,
     encoding: BufferEncoding,
     callback: CallbackType
@@ -258,10 +261,12 @@ export function chunkSizeInBytes(sizeChoice: ChunkSizeChoice): number {
   }
 }
 
-function makeVerificationError(message: string): LibSignalErrorBase {
+function makeVerificationError(
+  message: string
+): IncrementalMacVerificationFailed {
   return new LibSignalErrorBase(
     message,
-    'VerificationFailed',
+    'IncrementalMacVerificationFailed',
     'incremental_mac'
-  );
+  ) as IncrementalMacVerificationFailed;
 }

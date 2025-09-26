@@ -12,6 +12,7 @@ use std::time::Duration;
 use atomic_take::AtomicTake;
 use bytes::Bytes;
 use futures_util::FutureExt as _;
+use futures_util::future::BoxFuture;
 use http::status::InvalidStatusCode;
 use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
@@ -21,12 +22,13 @@ use libsignal_net::chat::server_requests::DisconnectCause;
 use libsignal_net::chat::ws::ListenerEvent;
 use libsignal_net::chat::{
     self, ChatConnection, ConnectError, ConnectionInfo, DebugInfo as ChatServiceDebugInfo,
-    LanguageList, Request, Response as ChatResponse, SendError, UnauthenticatedChatHeaders,
+    EnablePermessageDeflate, LanguageList, Request, Response as ChatResponse, SendError,
+    UnauthenticatedChatHeaders,
 };
 use libsignal_net::connect_state::ConnectionResources;
 use libsignal_net::infra::route::{
-    ConnectionProxyConfig, DirectOrProxyProvider, RouteProvider, RouteProviderExt,
-    UnresolvedHttpsServiceRoute,
+    DirectOrProxyMode, DirectOrProxyModeDiscriminants, DirectOrProxyProvider, RouteProvider,
+    RouteProviderExt, TcpRoute, TlsRoute, UnresolvedHttpsServiceRoute,
 };
 use libsignal_net::infra::tcp_ssl::InvalidProxyConfig;
 use libsignal_net::infra::{EnableDomainFronting, EnforceMinimumTls};
@@ -35,6 +37,8 @@ use libsignal_protocol::Timestamp;
 use static_assertions::assert_impl_all;
 
 use crate::net::ConnectionManager;
+use crate::net::remote_config::RemoteConfigKey;
+use crate::support::LimitedLifetimeRef;
 use crate::*;
 
 pub type ChatConnectionInfo = ConnectionInfo;
@@ -80,18 +84,12 @@ assert_impl_all!(MaybeChatConnection: Send, Sync);
 impl UnauthenticatedChatConnection {
     pub async fn connect(
         connection_manager: &ConnectionManager,
-        languages: &[String],
+        languages: LanguageList,
     ) -> Result<Self, ConnectError> {
         let inner = establish_chat_connection(
             "unauthenticated",
             connection_manager,
-            Some(
-                UnauthenticatedChatHeaders {
-                    languages: LanguageList::parse(languages)
-                        .map_err(|_| ConnectError::InvalidConnectionConfiguration)?,
-                }
-                .into(),
-            ),
+            Some(UnauthenticatedChatHeaders { languages }.into()),
         )
         .await?;
         Ok(Self {
@@ -102,6 +100,27 @@ impl UnauthenticatedChatConnection {
             .into(),
         })
     }
+
+    /// Provides access to the inner ChatConnection using the [`Unauth`] wrapper of
+    /// libsignal-net-chat.
+    ///
+    /// This callback signature unfortunately requires boxing; there is not yet Rust syntax to say
+    /// "I return an unknown Future that might capture from its arguments" in closure position
+    /// specifically. It's also extra complicated to promise that the result doesn't have to outlive
+    /// &self; unfortunately there doesn't seem to be a simpler way to express this at this time!
+    /// (e.g. `for<'inner where 'outer: 'inner>`)
+    pub async fn as_typed<'outer, F, R>(&'outer self, callback: F) -> R
+    where
+        F: for<'inner> FnOnce(
+            LimitedLifetimeRef<'outer, 'inner, Unauth<ChatConnection>>,
+        ) -> BoxFuture<'inner, R>,
+    {
+        let guard = self.as_ref().read().await;
+        let MaybeChatConnection::Running(inner) = &*guard else {
+            panic!("listener was not set")
+        };
+        callback(LimitedLifetimeRef::from(<&Unauth<_>>::from(inner))).await
+    }
 }
 
 impl AuthenticatedChatConnection {
@@ -109,7 +128,7 @@ impl AuthenticatedChatConnection {
         connection_manager: &ConnectionManager,
         auth: Auth,
         receive_stories: bool,
-        languages: &[String],
+        languages: LanguageList,
     ) -> Result<Self, ConnectError> {
         let inner = establish_chat_connection(
             "authenticated",
@@ -118,8 +137,7 @@ impl AuthenticatedChatConnection {
                 chat::AuthenticatedChatHeaders {
                     auth,
                     receive_stories: receive_stories.into(),
-                    languages: LanguageList::parse(languages)
-                        .map_err(|_| ConnectError::InvalidConnectionConfiguration)?,
+                    languages,
                 }
                 .into(),
             ),
@@ -157,7 +175,7 @@ impl AuthenticatedChatConnection {
 
         log::info!("preconnecting chat");
         connection_resources
-            .preconnect_and_save(route_provider, "preconnect".into())
+            .preconnect_and_save(route_provider, "preconnect")
             .await?;
         Ok(())
     }
@@ -311,23 +329,17 @@ async fn establish_chat_connection(
         user_agent,
         endpoints,
         network_change_event_tx,
+        remote_config,
         ..
     } = connection_manager;
 
-    let (ws_config, enable_domain_fronting, enforce_minimum_tls) = {
+    let (enable_domain_fronting, enforce_minimum_tls) = {
         let endpoints_guard = endpoints.lock().expect("not poisoned");
         (
-            endpoints_guard.chat_ws2_config,
             endpoints_guard.enable_fronting,
             endpoints_guard.enforce_minimum_tls,
         )
     };
-
-    let libsignal_net::infra::ws2::Config {
-        local_idle_timeout,
-        remote_idle_disconnect_timeout,
-        ..
-    } = ws_config;
 
     let chat_connect = &env.chat_domain_config.connect;
     let connection_resources = ConnectionResources {
@@ -343,23 +355,69 @@ async fn establish_chat_connection(
         enable_domain_fronting,
         enforce_minimum_tls,
     )?;
+    let proxy_mode = DirectOrProxyModeDiscriminants::from(&route_provider.mode);
 
     log::info!("connecting {auth_type} chat");
 
+    let mut chat_ws_config = env.chat_ws_config;
+    let (timeout_millis, enable_permessage_deflate) = {
+        let guard = remote_config.lock().expect("unpoisoned");
+        (
+            guard.get(RemoteConfigKey::ChatRequestConnectionCheckTimeoutMilliseconds),
+            guard.is_enabled(RemoteConfigKey::EnableChatPermessageDeflate),
+        )
+    };
+    if let Some(timeout_millis) = timeout_millis
+        .as_option()
+        .and_then(|v| match u64::from_str(v) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::error!(
+                    "bad {}: {v:?} ({e})",
+                    RemoteConfigKey::ChatRequestConnectionCheckTimeoutMilliseconds
+                );
+                None
+            }
+        })
+    {
+        chat_ws_config.post_request_interface_check_timeout = Duration::from_millis(timeout_millis);
+    }
+
+    let enable_permessage_deflate = match enable_permessage_deflate {
+        true => EnablePermessageDeflate::Yes,
+        false => EnablePermessageDeflate::No,
+    };
     ChatConnection::start_connect_with(
         connection_resources,
         route_provider,
         user_agent,
-        libsignal_net::chat::ws::Config {
-            local_idle_timeout,
-            remote_idle_timeout: remote_idle_disconnect_timeout,
-            initial_request_id: 0,
-        },
+        chat_ws_config,
+        enable_permessage_deflate,
         headers,
         auth_type,
     )
     .inspect(|r| match r {
-        Ok(_) => log::info!("successfully connected {auth_type} chat"),
+        Ok(connection) => {
+            match (
+                connection.connection_info().route_info.unresolved.proxy,
+                proxy_mode,
+            ) {
+                (None, DirectOrProxyModeDiscriminants::DirectOnly)
+                | (Some(_), DirectOrProxyModeDiscriminants::ProxyOnly)
+                | (Some(_), DirectOrProxyModeDiscriminants::ProxyThenDirect) => {
+                    log::info!("successfully connected {auth_type} chat")
+                }
+                (None, DirectOrProxyModeDiscriminants::ProxyThenDirect) => log::warn!(
+                    "connected {auth_type} chat using a direct connection rather than the specified proxy"
+                ),
+                (None, DirectOrProxyModeDiscriminants::ProxyOnly) => unreachable!(
+                    "made a direct connection despite using only proxy routes; this is a bug in libsignal"
+                ),
+                (Some(_), DirectOrProxyModeDiscriminants::DirectOnly) => unreachable!(
+                    "made a proxy connection despite not having proxy config; this is a bug in libsignal"
+                ),
+            }
+        }
         Err(e) => log::warn!("failed to connect {auth_type} chat: {e}"),
     })
     .await
@@ -369,24 +427,33 @@ fn make_route_provider(
     connection_manager: &ConnectionManager,
     enable_domain_fronting: EnableDomainFronting,
     enforce_minimum_tls: EnforceMinimumTls,
-) -> Result<impl RouteProvider<Route = UnresolvedHttpsServiceRoute>, ConnectError> {
+) -> Result<
+    DirectOrProxyProvider<
+        impl RouteProvider<
+            Route = UnresolvedHttpsServiceRoute<
+                TlsRoute<TcpRoute<libsignal_net::infra::route::UnresolvedHost>>,
+            >,
+        >,
+    >,
+    ConnectError,
+> {
     let ConnectionManager {
         env,
         transport_connector,
         ..
     } = connection_manager;
 
-    let proxy_config: Option<ConnectionProxyConfig> =
-        (&*transport_connector.lock().expect("not poisoned"))
-            .try_into()
-            .map_err(|InvalidProxyConfig| ConnectError::InvalidConnectionConfiguration)?;
+    let proxy_mode: DirectOrProxyMode = (&*transport_connector.lock().expect("not poisoned"))
+        .try_into()
+        .map_err(|InvalidProxyConfig| ConnectError::InvalidConnectionConfiguration)?;
 
     let chat_connect = &env.chat_domain_config.connect;
 
-    Ok(DirectOrProxyProvider::maybe_proxied(
-        chat_connect.route_provider_with_options(enable_domain_fronting, enforce_minimum_tls),
-        proxy_config,
-    ))
+    Ok(DirectOrProxyProvider {
+        inner: chat_connect
+            .route_provider_with_options(enable_domain_fronting, enforce_minimum_tls),
+        mode: proxy_mode,
+    })
 }
 
 pub struct HttpRequest {

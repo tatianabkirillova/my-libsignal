@@ -12,11 +12,11 @@ use libsignal_net::infra::certs::RootCertificates;
 use libsignal_net::infra::dns::custom_resolver::DnsTransport;
 use libsignal_net::infra::dns::dns_lookup::DnsLookupRequest;
 use libsignal_net::infra::host::Host;
+use libsignal_net_infra::Alpn;
 use libsignal_net_infra::dns::dns_transport_doh::DohTransportConnector;
 use libsignal_net_infra::route::{
     HttpRouteFragment, HttpsTlsRoute, NoDelay, TcpRoute, TlsRoute, TlsRouteFragment,
 };
-use libsignal_net_infra::Alpn;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -69,7 +69,7 @@ async fn main() {
         NoDelay,
         DohTransportConnector::default(),
         (),
-        "dns_over_https".into(),
+        "dns_over_https",
         |_| std::ops::ControlFlow::Continue::<std::convert::Infallible>(()),
     )
     .await

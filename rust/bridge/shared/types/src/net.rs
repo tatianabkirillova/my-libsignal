@@ -9,21 +9,26 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use libsignal_net::connect_state::{
-    ConnectState, DefaultConnectorFactory, PreconnectingFactory, SUGGESTED_CONNECT_CONFIG,
-    SUGGESTED_TLS_PRECONNECT_LIFETIME,
+    ConnectState, ConnectionResources, DefaultConnectorFactory, PreconnectingFactory,
+    SUGGESTED_CONNECT_CONFIG, SUGGESTED_TLS_PRECONNECT_LIFETIME,
 };
+use libsignal_net::enclave::{EnclaveEndpoint, EnclaveKind};
 use libsignal_net::env::{Env, UserAgent};
 use libsignal_net::infra::dns::DnsResolver;
-use libsignal_net::infra::route::ConnectionProxyConfig;
+use libsignal_net::infra::route::{
+    ConnectionProxyConfig, DirectOrProxyMode, DirectOrProxyProvider, RouteProvider,
+    RouteProviderExt as _, UnresolvedWebsocketServiceRoute,
+};
 use libsignal_net::infra::tcp_ssl::{InvalidProxyConfig, TcpSslConnector};
-use libsignal_net::infra::{EnableDomainFronting, RECOMMENDED_WS2_CONFIG};
+use libsignal_net::infra::{AsHttpHeader as _, EnableDomainFronting};
 
-use self::remote_config::{RemoteConfig, RemoteConfigKeys};
+use self::remote_config::{RemoteConfig, RemoteConfigKey};
 use crate::*;
 
 pub mod cdsi;
 pub mod chat;
 pub mod registration;
+pub mod svrb;
 
 pub use libsignal_net::infra::EnforceMinimumTls;
 
@@ -49,8 +54,6 @@ impl Environment {
 }
 
 struct EndpointConnections {
-    chat_ws2_config: libsignal_net::infra::ws2::Config,
-    cdsi_ws2_config: libsignal_net::infra::ws2::Config,
     enable_fronting: EnableDomainFronting,
     enforce_minimum_tls: EnforceMinimumTls,
 }
@@ -70,14 +73,36 @@ impl EndpointConnections {
             env.chat_domain_config.connect.hostname
         );
         Self {
-            chat_ws2_config: RECOMMENDED_WS2_CONFIG,
-            cdsi_ws2_config: RECOMMENDED_WS2_CONFIG,
             enable_fronting: if use_fallbacks {
                 EnableDomainFronting::OneDomainPerProxy
             } else {
                 EnableDomainFronting::No
             },
             enforce_minimum_tls,
+        }
+    }
+}
+
+pub struct EnclaveConnectionResources<'a> {
+    connect_state: &'a std::sync::Mutex<ConnectState<PreconnectingFactory>>,
+    dns_resolver: &'a DnsResolver,
+    network_change_event: ::tokio::sync::watch::Receiver<()>,
+    confirmation_header_name: Option<&'static str>,
+}
+
+impl EnclaveConnectionResources<'_> {
+    pub fn as_connection_resources(&self) -> ConnectionResources<'_, PreconnectingFactory> {
+        let Self {
+            connect_state,
+            dns_resolver,
+            network_change_event,
+            confirmation_header_name,
+        } = self;
+        ConnectionResources {
+            connect_state,
+            dns_resolver,
+            network_change_event,
+            confirmation_header_name: confirmation_header_name.map(http::HeaderName::from_static),
         }
     }
 }
@@ -102,7 +127,7 @@ impl ConnectionManager {
     pub fn new(
         environment: Environment,
         user_agent: &str,
-        remote_config: HashMap<String, String>,
+        remote_config: HashMap<String, Arc<str>>,
     ) -> Self {
         log::info!("Initializing connection manager for {}...", &environment);
         Self::new_from_static_environment(environment.env(), user_agent, remote_config)
@@ -111,7 +136,7 @@ impl ConnectionManager {
     pub fn new_from_static_environment(
         env: Env<'static>,
         user_agent: &str,
-        remote_config: HashMap<String, String>,
+        remote_config: HashMap<String, Arc<str>>,
     ) -> Self {
         let (network_change_event_tx, network_change_event_rx) = ::tokio::sync::watch::channel(());
         let user_agent = UserAgent::with_libsignal_version(user_agent);
@@ -121,7 +146,7 @@ impl ConnectionManager {
         let transport_connector =
             std::sync::Mutex::new(TcpSslConnector::new_direct(dns_resolver.clone()));
         let remote_config = RemoteConfig::new(remote_config);
-        let enforce_minimum_tls = if remote_config.is_enabled(RemoteConfigKeys::EnforceMinimumTls) {
+        let enforce_minimum_tls = if remote_config.is_enabled(RemoteConfigKey::EnforceMinimumTls) {
             EnforceMinimumTls::Yes
         } else {
             EnforceMinimumTls::No
@@ -148,9 +173,9 @@ impl ConnectionManager {
         }
     }
 
-    pub fn set_proxy(&self, proxy: ConnectionProxyConfig) {
+    pub fn set_proxy_mode(&self, proxy_mode: DirectOrProxyMode) {
         let mut guard = self.transport_connector.lock().expect("not poisoned");
-        guard.set_proxy(proxy);
+        guard.set_proxy_mode(proxy_mode);
     }
 
     pub fn set_invalid_proxy(&self) {
@@ -158,14 +183,11 @@ impl ConnectionManager {
         guard.set_invalid();
     }
 
-    pub fn clear_proxy(&self) {
-        let mut guard = self.transport_connector.lock().expect("not poisoned");
-        guard.clear_proxy();
-    }
-
     pub fn is_using_proxy(&self) -> Result<bool, InvalidProxyConfig> {
         let guard = self.transport_connector.lock().expect("not poisoned");
-        guard.proxy().map(|proxy| proxy.is_some())
+        guard
+            .proxy()
+            .map(|proxy| !matches!(proxy, DirectOrProxyMode::DirectOnly))
     }
 
     pub fn set_ipv6_enabled(&self, ipv6_enabled: bool) {
@@ -187,7 +209,7 @@ impl ConnectionManager {
             .remote_config
             .lock()
             .expect("not poisoned")
-            .is_enabled(RemoteConfigKeys::EnforceMinimumTls)
+            .is_enabled(RemoteConfigKey::EnforceMinimumTls)
         {
             EnforceMinimumTls::Yes
         } else {
@@ -197,7 +219,7 @@ impl ConnectionManager {
         *self.endpoints.lock().expect("not poisoned") = Arc::new(new_endpoints);
     }
 
-    pub fn set_remote_config(&self, remote_config: HashMap<String, String>) {
+    pub fn set_remote_config(&self, remote_config: HashMap<String, Arc<str>>) {
         *self.remote_config.lock().expect("not poisoned") = RemoteConfig::new(remote_config);
     }
 
@@ -224,6 +246,48 @@ impl ConnectionManager {
             .lock()
             .expect("not poisoned")
             .network_changed(now.into());
+    }
+
+    pub fn enclave_connection_resources(
+        &self,
+        enclave: &EnclaveEndpoint<impl EnclaveKind>,
+    ) -> Result<
+        (
+            EnclaveConnectionResources<'_>,
+            impl RouteProvider<Route = UnresolvedWebsocketServiceRoute> + '_,
+        ),
+        InvalidProxyConfig,
+    > {
+        let proxy_mode: DirectOrProxyMode =
+            (&*self.transport_connector.lock().expect("not poisoned")).try_into()?;
+
+        let (enable_domain_fronting, enforce_minimum_tls) = {
+            let guard = self.endpoints.lock().expect("not poisoned");
+            (guard.enable_fronting, guard.enforce_minimum_tls)
+        };
+        let route_provider = enclave
+            .enclave_websocket_provider_with_options(enable_domain_fronting, enforce_minimum_tls)
+            .map_routes(|mut route| {
+                route.fragment.headers.extend([self.user_agent.as_header()]);
+                route
+            });
+        let confirmation_header_name = enclave.domain_config.connect.confirmation_header_name;
+        Ok((
+            EnclaveConnectionResources {
+                connect_state: &self.connect,
+                dns_resolver: &self.dns_resolver,
+                network_change_event: self.network_change_event_tx.subscribe(),
+                confirmation_header_name,
+            },
+            DirectOrProxyProvider {
+                inner: route_provider,
+                mode: proxy_mode,
+            },
+        ))
+    }
+
+    pub fn env(&self) -> &Env<'static> {
+        &self.env
     }
 }
 
@@ -253,7 +317,7 @@ mod test {
         let cm =
             ConnectionManager::new(Environment::Staging, "test-user-agent", Default::default());
         cm.set_invalid_proxy();
-        let err = UnauthenticatedChatConnection::connect(&cm, &[])
+        let err = UnauthenticatedChatConnection::connect(&cm, Default::default())
             .await
             .map(|_| ())
             .expect_err("should fail to connect");

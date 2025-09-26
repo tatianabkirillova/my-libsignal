@@ -48,7 +48,7 @@ impl<T> BorrowedSliceOf<T> {
             return Ok(&[]);
         }
 
-        Ok(std::slice::from_raw_parts(self.base, self.length))
+        Ok(unsafe { std::slice::from_raw_parts(self.base, self.length) })
     }
 }
 
@@ -68,7 +68,7 @@ impl<T> BorrowedMutableSliceOf<T> {
             return Ok(&mut []);
         }
 
-        Ok(std::slice::from_raw_parts_mut(self.base, self.length))
+        Ok(unsafe { std::slice::from_raw_parts_mut(self.base, self.length) })
     }
 }
 
@@ -94,7 +94,7 @@ impl<T> OwnedBufferOf<T> {
             return Box::new([]);
         }
 
-        Box::from_raw(std::slice::from_raw_parts_mut(base, length))
+        unsafe { Box::from_raw(std::slice::from_raw_parts_mut(base, length)) }
     }
 }
 
@@ -131,8 +131,8 @@ impl BytestringArray {
     pub unsafe fn into_boxed_parts(self) -> (Box<[u8]>, Box<[usize]>) {
         let Self { bytes, lengths } = self;
 
-        let bytes = bytes.into_box();
-        let lengths = lengths.into_box();
+        let bytes = unsafe { bytes.into_box() };
+        let lengths = unsafe { lengths.into_box() };
         (bytes, lengths)
     }
 }
@@ -150,6 +150,24 @@ impl<S: AsRef<[u8]>> FromIterator<S> for BytestringArray {
             bytes: bytes.into_boxed_slice().into(),
             lengths: lengths.into_boxed_slice().into(),
         }
+    }
+}
+
+impl BorrowedBytestringArray {
+    /// Allows iterating over the segments.
+    ///
+    /// SAFETY: Must be constructed correctly and refer to valid memory.
+    unsafe fn iter(&self) -> Result<impl ExactSizeIterator<Item = &[u8]>, NullPointerError> {
+        let BorrowedBytestringArray { bytes, lengths } = self;
+        let (mut bytes, lengths) = unsafe { (bytes.as_slice()?, lengths.as_slice()?) };
+
+        // Note that this iterator will support DoubleEndedIterator, but we must not expose that to
+        // callers, since we have a stateful iteration happening here.
+        Ok(lengths.iter().map(move |length| {
+            let next;
+            (next, bytes) = bytes.split_at(*length);
+            next
+        }))
     }
 }
 
@@ -314,12 +332,20 @@ pub fn run_ffi_safe<F: FnOnce() -> Result<(), SignalFfiError> + std::panic::Unwi
     }
 }
 
+/// Like [`std::panic::AssertUnwindSafe`], but FFI-compatible.
+#[derive(derive_more::Deref)]
+#[repr(transparent)]
+pub struct UnwindSafeArg<T>(pub T);
+
+impl<T> std::panic::UnwindSafe for UnwindSafeArg<T> {}
+impl<T> std::panic::RefUnwindSafe for UnwindSafeArg<T> {}
+
 pub unsafe fn native_handle_cast<T>(handle: *const T) -> Result<&'static T, SignalFfiError> {
     if handle.is_null() {
         return Err(NullPointerError.into());
     }
 
-    Ok(&*(handle))
+    Ok(unsafe { &*(handle) })
 }
 
 pub unsafe fn native_handle_cast_mut<T>(handle: *mut T) -> Result<&'static mut T, SignalFfiError> {
@@ -327,7 +353,7 @@ pub unsafe fn native_handle_cast_mut<T>(handle: *mut T) -> Result<&'static mut T
         return Err(NullPointerError.into());
     }
 
-    Ok(&mut *handle)
+    Ok(unsafe { &mut *handle })
 }
 
 pub unsafe fn write_result_to<T: ResultTypeInfo>(
@@ -337,7 +363,9 @@ pub unsafe fn write_result_to<T: ResultTypeInfo>(
     if ptr.is_null() {
         return Err(NullPointerError.into());
     }
-    *ptr = value.convert_into()?;
+    unsafe {
+        *ptr = value.convert_into()?;
+    }
     Ok(())
 }
 
@@ -349,11 +377,11 @@ macro_rules! ffi_bridge_handle_destroy {
     ( $typ:ty as $ffi_name:ident ) => {
         ::paste::paste! {
             #[cfg(feature = "ffi")]
-            #[export_name = concat!(
+            #[unsafe(export_name = concat!(
                 env!("LIBSIGNAL_BRIDGE_FN_PREFIX_FFI"),
                 stringify!($ffi_name),
                 "_destroy",
-            )]
+            ))]
             #[allow(non_snake_case)]
             pub unsafe extern "C" fn [<__bridge_handle_ffi_ $ffi_name _destroy>](
                 p: $crate::ffi::MutPointer<$typ>
@@ -366,7 +394,7 @@ macro_rules! ffi_bridge_handle_destroy {
                 let p = std::panic::AssertUnwindSafe(p.into_inner());
                 ffi::run_ffi_safe(|| {
                     if !p.is_null() {
-                        drop(Box::from_raw(*p));
+                        drop(unsafe { Box::from_raw(*p) });
                     }
                     Ok(())
                 })
